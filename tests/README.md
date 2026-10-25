@@ -14,7 +14,7 @@ C:\pixi_env\.pixi\envs\default\python.exe test_parser.py
 
 覆盖：
 
-- 多帧 zstd、单帧、损坏的尾帧
+- 多帧 zstd、单帧、损坏的尾帧、真正截断的最后一帧（保留完整前缀）
 - 注入消息不切断回答
 - 中途插话（steer）单独成为提问
 - `tool/call` ↔ `tool/result` 配对、exit code、stderr、job 耗时

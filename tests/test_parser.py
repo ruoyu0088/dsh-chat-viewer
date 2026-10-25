@@ -107,6 +107,21 @@ class BuildSessionTests(unittest.TestCase):
         self.assertEqual(s["turns"][0]["answer"],
                          "第一轮回答的第一段。\n\n第一轮回答的第二段。")
 
+    def test_truncated_final_frame_keeps_prefix(self):
+        # This is the shape of a live session being appended to: the last
+        # Zstandard frame is cut off.  ZstdFile yields the complete prefix and
+        # raises EOFError; the viewer must keep the prefix.
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            path = write_session(home)
+            data = path.read_bytes()
+            path.write_bytes(data[:-100])
+            parsed = parse_session_file(path)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(len(parsed["turns"]), 2)
+        self.assertEqual(parsed["turns"][0]["answer"],
+                         "第一轮回答的第一段。\n\n第一轮回答的第二段。")
+
     def test_steer(self):
         s = self._session(steer_events())
         self.assertEqual(len(s["turns"]), 2)
