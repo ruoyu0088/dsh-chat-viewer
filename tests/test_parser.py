@@ -25,11 +25,11 @@ except Exception:
     pass
 
 from fixture import SID, steer_events, write_session  # noqa: E402
-from lib.dsh import Store, build_session, parse_session_file  # noqa: E402
+from lib.dsh import Store, build_session, calls_payload, parse_session_file  # noqa: E402
 
 
 def payload(turn: dict, name: str) -> dict:
-    for call in turn.get("calls_payload") or []:
+    for call in calls_payload(turn):
         if call.get("name") == name:
             return call
     raise AssertionError(f"no tool call named {name}")
@@ -60,7 +60,7 @@ class BuildSessionTests(unittest.TestCase):
         self.assertFalse(q1["open"])
         self.assertFalse(q2["open"])
         self.assertEqual(q1["reasoning"][0]["text"], "先想一下：需要列目录。")
-        self.assertEqual(len(q1["calls_payload"]), 4)
+        self.assertEqual(len(q1["calls"]), 4)
 
     def test_pwsh_result(self):
         s = self._session()
@@ -159,12 +159,22 @@ class StoreTests(unittest.TestCase):
             chats = store.chats()
             self.assertEqual(len(chats), 1)
             chat = chats[0]
-            self.assertEqual(chat["title"], "测试会话")
+            # Listing uses metadata only: the projection cache title is shown
+            # until the full log is opened.
+            self.assertEqual(chat["title"], "缓存标题")
+            self.assertFalse(chat["loaded"])
             self.assertEqual(chat["questions"], 2)
             self.assertTrue(chat["pinned"])
             self.assertFalse(chat["archived"])
             self.assertEqual(chat["workspace"]["title"], "test-project")
             self.assertEqual(chat["tokens"]["outputTokens"], 200)
+            # Opening the session parses it once and refines the metadata.
+            self.assertEqual(store.turns(SID)[0]["q"], "第一轮问题：列一下文件。")
+            self.assertTrue(chat["loaded"])
+            self.assertEqual(chat["title"], "测试会话")
+            self.assertEqual(chat["answered"], 2)
+            self.assertGreater(chat["message_count"], 0)
+            self.assertEqual(store.meta()["loaded"], 1)
             self.assertEqual(store.turn(SID, 2)["q"], "第一轮问题：列一下文件。")
             self.assertIsNone(store.turn(SID, 999))
 

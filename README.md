@@ -12,7 +12,9 @@
 ## 功能
 
 - **三栏布局**：所有会话 / 提问列表 / 回答；两栏可折叠（VSCode 风格），状态记在 localStorage。
-- **会话分组**：按 workspace 显示；置顶、归档、进行中、模型、提问数、消息数、最后活动时间。
+- **快速启动**：会话列表只读每个日志的**头部第一帧** + `session_projcache` 元信息，不解析完整日志；
+  点开某个会话时才解析并缓存它的全部内容。
+- **会话分组**：按 workspace 显示；置顶、归档、进行中、模型、提问数、最后活动时间。
 - **提问列表**：真实用户提问、中途插话（steer）、自动继续、进行中标记；回答字数、工具数、思考字数、
   待办数、压缩次数、图片数。
 - **回答渲染**：Markdown、GFM 表格、KaTeX 数学公式、highlight.js 语法高亮、代码块复制/折叠、
@@ -48,6 +50,20 @@ DSH 的会话存储与 Hermes 的 SQLite `state.db` 完全不同，是**事件�
   所以查看器直接按时间顺序展示全部记录，不需要像 Hermes 那样从 `active/compacted` 多层消息重建。
 - 当前支持 v4 日志；同一个会话目录有多个代际时，自动选择版本号最高的文件（压缩优先）。
 - 正在写入的会话，最后一帧可能是**未完成帧**；查看器会忽略它，等下一次刷新再读完整帧。
+
+### 启动与懒加载
+
+- **列表阶段**：只读每个日志的第一个 Zstandard 帧（session header，几百字节）和
+  `session_projcache` 里的标题/模型/token/`sessionStats.turns`/`titleInput.count`，
+  再加上 `workspace.json` 的置顶/归档；不解压完整日志。
+- **提问数**：取 `max(sessionStats.turns, titleInput.count, turnOutline.turns 数)`。
+  `sessionStats.turns` 不含中途插话，`titleInput.count` 含；取最大值后与本机全量解析结果逐条一致。
+- **点开会话**：第一次请求 `/questions` 或 `/turn` 时才解压、解析并缓存该会话；
+  后续请求直接复用缓存，只有日志文件变化时才重新解析。
+- **工具卡**：`tool/call` / `tool/result` 的正文、diff、命令输出只在打开具体提问时渲染，
+  不会在解析整个会话时为所有轮次预先格式化。
+- 因此启动开销与历史总量基本无关；代价是第一次点开一个很大的会话需要等它解析完
+  （本机最大会话约 30 MB 解压后，首次打开约 10 秒），之后就是缓存的。
 
 ### 提问 / 回答的配对
 
@@ -124,6 +140,9 @@ python server.py --home D:\dsh-home   :: 指定 DSH home（默认 %USERPROFILE%\
 ```
 
 > 如果 `run.bat` 里的 Python 路径不对，改 `PYEXE` 即可；也可以用任何 Python 3.14+ 运行 `server.py`。
+>
+> 启动后先出现会话列表（只读元信息）；点开某个会话后才读取它的完整日志，右侧/中栏会显示
+> “正在读取会话日志”。第一次打开最大的会话可能需要几秒，之后走缓存。
 
 ### 界面快捷键
 
@@ -140,11 +159,11 @@ python server.py --home D:\dsh-home   :: 指定 DSH home（默认 %USERPROFILE%\
 
 | 路径 | 说明 |
 |---|---|
-| `GET /api/meta` | DSH home、会话数、提问数、workspace 数 |
-| `GET /api/chats` | 所有会话（标题/目录/模型/token/提问数/置顶/归档/进行中） |
-| `GET /api/chats/{sid}/questions?q=&scope=q\|a\|all` | 该会话的提问列表（可过滤） |
-| `GET /api/turn/{sid}/{seq}` | 单条提问：完整提问、回答、思考、工具卡、压缩摘要、待办 |
-| `GET /api/search?q=&scope=&sid=&limit=` | 跨会话搜索 |
+| `GET /api/meta` | DSH home、会话数、提问数、workspace 数、已加载会话数 |
+| `GET /api/chats` | 所有会话的**元信息**（不解析完整日志；标题/目录/模型/token/提问数/置顶/归档/进行中/loaded） |
+| `GET /api/chats/{sid}/questions?q=&scope=q\|a\|all` | 该会话的提问列表；**首次调用**解析完整日志并缓存 |
+| `GET /api/turn/{sid}/{seq}` | 单条提问：完整提问、回答、思考、工具卡、压缩摘要、待办；首次调用解析并缓存 |
+| `GET /api/search?q=&scope=&sid=&limit=` | 跨会话搜索（首次搜索会解析所有会话） |
 | `GET /file?path=<绝对路径>` | 只读提供**图片**文件（唯一允许的读取类型） |
 | `GET /attachment?id=<附件id>&sid=<会话id>` | 只读提供 DSH 图片附件（在已知附件目录中查找） |
 
@@ -221,6 +240,11 @@ node ui.js
   更早的 v3 日志若使用 `tool-result` 包装，工具结果可能只显示为普通注入消息；同一会话目录存在
   v4 时会自动选 v4。
 - **zstd**：必须用 Python 3.14+；Python 3.12 没有 `compression.zstd`。
+- **首次打开**：会话列表只读元信息；第一次点开一个大会话需要解析完整日志
+  （本机最大的约 30 MB 解压后、10 秒左右），之后走缓存。正在写入的会话在文件变化后
+  会重新解析这一条会话。
+- **全局搜索**：第一次跨会话搜索需要顺序解析所有会话，可能较慢；当前会话内搜索通常已缓存。
+- **元信息缺失**：没有 `session_projcache` 的会话，列表里的提问数先显示 0，点开后用真实值修正。
 - **实时尾帧**：正在写入的未完成 zstd 帧会被忽略，下一次刷新（3 秒内）再读；不会报错。
 - **附件**：图片附件按 id 在 `.dsh/attachments`、`.dsh/media`、`.dsh/storages/*` 等已知目录里查找；
   找不到时显示「图像文件已不存在」，不影响其它内容。

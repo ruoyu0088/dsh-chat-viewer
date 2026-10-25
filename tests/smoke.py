@@ -112,11 +112,15 @@ def main() -> int:
 
             status, chats = get_json(base, "/api/chats")
             chat = (chats or {}).get("chats", [{}])[0]
-            check("chats", status == 200 and chat.get("title") == "测试会话"
-                  and chat.get("questions") == 2 and chat.get("pinned") is True)
+            check("chats (metadata only)", status == 200 and chat.get("title") == "缓存标题"
+                  and chat.get("questions") == 2 and chat.get("pinned") is True
+                  and chat.get("loaded") is False)
 
             status, questions = get_json(base, f"/api/chats/{quote(SID)}/questions")
             check("questions", status == 200 and len(questions.get("questions", [])) == 2)
+            loaded_chat = questions.get("chat") or {}
+            check("opening session loads the log", loaded_chat.get("loaded") is True
+                  and loaded_chat.get("title") == "测试会话")
 
             status, filtered = get_json(
                 base, f"/api/chats/{quote(SID)}/questions?q={quote('第二轮')}&scope=q"

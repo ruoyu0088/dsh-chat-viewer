@@ -238,6 +238,44 @@ def parse_jsonl(raw: bytes) -> list[dict]:
     return rows
 
 
+HEADER_READ_BYTES = 64 << 10  # the header is its own small Zstandard frame
+
+
+def read_header(path: Path) -> dict | None:
+    """Read only the session header, without decompressing the whole log.
+
+    DSH writes the header as the first independent Zstandard frame.  Reading a
+    bounded prefix and decoding just that frame is what makes listing dozens of
+    large sessions fast; the full log is parsed later, on demand.
+    """
+    try:
+        with path.open("rb") as handle:
+            chunk = handle.read(HEADER_READ_BYTES)
+    except OSError:
+        return None
+    if not chunk:
+        return None
+    if path.name.endswith(".zstd"):
+        if zstd is None:
+            return None
+        try:
+            first = zstd.ZstdDecompressor().decompress(chunk)
+        except Exception:
+            # A header frame larger than the prefix (or a torn first frame):
+            # fall back to the full file, still decoding only its first frame.
+            try:
+                first = zstd.ZstdDecompressor().decompress(path.read_bytes())
+            except Exception:
+                return None
+    else:
+        first = chunk.split(b"\n", 1)[0] + b"\n"
+    rows = parse_jsonl(first)
+    for row in rows:
+        if row.get("type") == "session":
+            return row
+    return rows[0] if rows else None
+
+
 # ---------------------------------------------------------------------------
 # content blocks
 # ---------------------------------------------------------------------------
@@ -829,6 +867,15 @@ def call_payload(call: dict) -> dict:
     return payload
 
 
+def calls_payload(turn: dict) -> list[dict]:
+    """Render every tool call of one turn for the API.
+
+    Kept out of ``build_session``: rendering command output, diffs and file
+    contents for every turn is expensive and only the opened turn needs it.
+    """
+    return [call_payload(call) for call in (turn.get("calls") or [])]
+
+
 # ---------------------------------------------------------------------------
 # session parsing
 # ---------------------------------------------------------------------------
@@ -1181,7 +1228,6 @@ def build_session(sid: str, header: dict, events: list[dict], proj: dict | None 
         for call in turn["calls"]:
             names[call["name"]] = names.get(call["name"], 0) + 1
         turn["tool_summary"] = [{"name": n, "count": c} for n, c in sorted(names.items())]
-        turn["calls_payload"] = [call_payload(c) for c in turn["calls"]]
         turn["open"] = bool(
             turn is last
             and turn_open
@@ -1297,17 +1343,63 @@ def load_projcache(home: Path, sid: str) -> dict:
     model_sel = _row_value(rows, "modelSelection")
     title = _row_value(rows, "title")
     working = _row_value(rows, "workingDirectory")
+    title_input = _row_value(rows, "titleInput")
+    time_context = _row_value(rows, "timeContext")
+    session_list = _row_value(rows, "sessionListMetadata")
+    outline = _row_value(rows, "turnOutline")
+    stats = stats if isinstance(stats, dict) else {}
     out = {
         "title": title if isinstance(title, str) else "",
         "tokens": (tokens or {}).get("totals") if isinstance(tokens, dict) else {},
-        "stats": stats if isinstance(stats, dict) else {},
+        "stats": stats,
         "cwd": working if isinstance(working, str) else "",
+        "title_input_count": 0,
+        "outline_count": 0,
+        "last_message_time": 0,
+        "last_prompt_at": 0,
+        "open": bool(stats.get("openStep")),
     }
+    if isinstance(title_input, dict):
+        try:
+            out["title_input_count"] = max(0, int(title_input.get("count") or 0))
+        except (TypeError, ValueError):
+            pass
+    if isinstance(outline, dict) and isinstance(outline.get("turns"), list):
+        out["outline_count"] = len(outline["turns"])
+    if isinstance(time_context, dict):
+        try:
+            out["last_message_time"] = max(0, int(time_context.get("lastMessageTime") or 0))
+        except (TypeError, ValueError):
+            pass
+    if isinstance(session_list, dict):
+        try:
+            out["last_prompt_at"] = max(0, int(session_list.get("lastPromptAt") or 0))
+        except (TypeError, ValueError):
+            pass
     if isinstance(model_sel, dict):
         last = model_sel.get("lastUsed") if isinstance(model_sel.get("lastUsed"), dict) else {}
         out["model"] = last.get("model") or ""
         out["provider"] = last.get("provider") or ""
     return out
+
+
+def metadata_question_count(proj: dict) -> int:
+    """Best question count available without reading the event log.
+
+    ``sessionStats.turns`` counts agent turns; a mid-turn steer adds a user
+    message without a new turn, and ``titleInput.count`` counts those human
+    messages.  Their maximum matched full parsing on every local session.
+    """
+    values = [proj.get("outline_count"), proj.get("title_input_count")]
+    stats = proj.get("stats") if isinstance(proj.get("stats"), dict) else {}
+    values.append(stats.get("turns"))
+    best = 0
+    for value in values:
+        try:
+            best = max(best, int(value or 0))
+        except (TypeError, ValueError):
+            pass
+    return best
 
 
 def load_workspace_meta(home: Path) -> tuple[dict[str, dict], set[str], set[str]]:
@@ -1349,17 +1441,32 @@ class _CacheEntry:
     data: dict | None
 
 
+@dataclass
+class _LoadedSession:
+    """A fully parsed log, kept only after the user opens that session."""
+
+    stamp: tuple[int, int] | None
+    data: dict
+
+
 class Store:
-    """Session cache, invalidated when a session log or metadata file changes."""
+    """Metadata-first session store; full logs are parsed on demand.
+
+    Listing sessions reads only the first Zstandard frame (the session header)
+    plus the small projection cache, so startup stays fast even when the
+    history contains hundreds of megabytes of logs.
+    """
 
     def __init__(self, home: Path):
         self.home = home
         self.sessions_root = home / "sessions"
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._load_lock = threading.Lock()
         self._stamp: tuple | None = None
         self._chats: list[dict] = []
         self._by_id: dict[str, dict] = {}
         self._cache: dict[str, _CacheEntry] = {}
+        self._sessions: dict[str, _LoadedSession] = {}
 
     # -- change detection --------------------------------------------------
     def _files(self) -> list[Path]:
@@ -1407,81 +1514,199 @@ class Store:
         self._cache[cache_key] = _CacheEntry(stamp, data)
         return data
 
+    def _file_stamp(self, path: Path) -> tuple[int, int] | None:
+        try:
+            stat = path.stat()
+            return (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            return None
+
+    @staticmethod
+    def _cwd_key(path: str | None) -> str:
+        return str(path or "").replace("\\", "/").rstrip("/").casefold()
+
+    @classmethod
+    def _workspace_for(
+        cls,
+        sid: str,
+        cwd: str,
+        workspace_map: dict[str, dict],
+        workspace_by_path: dict[str, dict] | None = None,
+    ) -> dict:
+        if sid in workspace_map:
+            return workspace_map[sid]
+        if workspace_by_path and cwd:
+            workspace = workspace_by_path.get(cls._cwd_key(cwd))
+            if workspace:
+                return workspace
+        return {
+            "id": "",
+            "path": cwd,
+            "title": Path(cwd).name if cwd else "(未知工作目录)",
+        }
+
+    def _build_meta(
+        self,
+        sid: str,
+        header: dict,
+        proj: dict,
+        path: Path,
+        stamp: tuple[int, int] | None,
+        workspace_map: dict[str, dict],
+        workspace_by_path: dict[str, dict],
+        pinned: set[str],
+        archived: set[str],
+    ) -> dict:
+        created = int(header.get("createdAt") or 0)
+        cwd = str(header.get("cwd") or proj.get("cwd") or "")
+        mtime_ms = int(stamp[0] // 1_000_000) if stamp else 0
+        last_activity = max(
+            created,
+            mtime_ms,
+            int(proj.get("last_message_time") or 0),
+            int(proj.get("last_prompt_at") or 0),
+        )
+        title = str(proj.get("title") or "").strip()
+        if not title:
+            title = Path(cwd).name if cwd else "(无标题)"
+        return {
+            "id": sid,
+            "title": title,
+            "cwd": cwd,
+            "created_at": created,
+            "last_activity_at": last_activity,
+            "model": str(proj.get("model") or ""),
+            "provider": str(proj.get("provider") or ""),
+            "questions": metadata_question_count(proj),
+            "answered": 0,
+            "message_count": 0,
+            "open": bool(proj.get("open")),
+            "pinned": sid in pinned,
+            "archived": sid in archived,
+            "parent": header.get("parentSession"),
+            "origin": header.get("origin"),
+            "depth": header.get("delegationDepth"),
+            "agent_preset": header.get("agentPreset"),
+            "is_seeded": bool(header.get("isSeeded")),
+            "tokens": proj.get("tokens") or {},
+            "stats": proj.get("stats") or {},
+            "workspace": self._workspace_for(sid, cwd, workspace_map, workspace_by_path),
+            "path": str(path),
+            "error": None,
+            "loaded": False,
+            "_file_stamp": stamp,
+        }
+
+    def _error_meta(
+        self,
+        sid: str,
+        proj: dict,
+        path: Path,
+        stamp: tuple[int, int] | None,
+        workspace_map: dict[str, dict],
+        workspace_by_path: dict[str, dict],
+        pinned: set[str],
+        archived: set[str],
+        message: str,
+    ) -> dict:
+        cwd = str(proj.get("cwd") or "")
+        mtime_ms = int(stamp[0] // 1_000_000) if stamp else 0
+        return {
+            "id": sid,
+            "title": f"（无法读取）{path.name}",
+            "cwd": cwd,
+            "created_at": 0,
+            "last_activity_at": mtime_ms,
+            "model": str(proj.get("model") or ""),
+            "provider": str(proj.get("provider") or ""),
+            "questions": metadata_question_count(proj),
+            "answered": 0,
+            "message_count": 0,
+            "open": False,
+            "pinned": sid in pinned,
+            "archived": sid in archived,
+            "parent": None,
+            "origin": None,
+            "depth": None,
+            "agent_preset": None,
+            "is_seeded": False,
+            "tokens": proj.get("tokens") or {},
+            "stats": proj.get("stats") or {},
+            "workspace": self._workspace_for(sid, cwd, workspace_map, workspace_by_path),
+            "path": str(path),
+            "error": message,
+            "loaded": False,
+            "_file_stamp": stamp,
+        }
+
+    @staticmethod
+    def _apply_loaded_meta(meta: dict, session: dict) -> None:
+        turns = session.get("turns") or []
+        meta["questions"] = len(turns)
+        meta["answered"] = sum(
+            1 for turn in turns
+            if (turn.get("answer") or "").strip() or turn.get("calls")
+        )
+        meta["message_count"] = int(session.get("message_count") or 0)
+        meta["open"] = bool(turns and turns[-1].get("open"))
+        meta["last_activity_at"] = max(
+            int(meta.get("last_activity_at") or 0),
+            int(session.get("last_activity_at") or 0),
+        )
+        title = str(session.get("title") or "").strip()
+        if title and title != "(无标题)":
+            meta["title"] = title
+        for key in (
+            "model", "provider", "cwd", "tokens", "stats", "origin",
+            "parent", "depth", "agent_preset", "is_seeded",
+        ):
+            value = session.get(key)
+            if value not in (None, "", {}, []):
+                meta[key] = value
+        meta["loaded"] = True
+        meta["error"] = None
+
     def _rebuild(self, files: list[Path]) -> None:
         workspace_map, pinned, archived = load_workspace_meta(self.home)
+        workspace_by_path: dict[str, dict] = {}
+        for workspace in workspace_map.values():
+            path = str(workspace.get("path") or "")
+            if path:
+                workspace_by_path.setdefault(self._cwd_key(path), workspace)
         chats: list[dict] = []
         by_id: dict[str, dict] = {}
-        seen_paths: set[str] = set()
 
         for path in files:
             if not SESSION_FILE_RE.match(path.name):
                 continue
-            key = str(path)
-            seen_paths.add(key)
-            try:
-                st = path.stat()
-                stamp = (st.st_mtime_ns, st.st_size)
-            except OSError:
-                stamp = None
-            entry = self._cache.get(key)
-            if entry and entry.stamp == stamp and entry.data is not None:
-                session = entry.data
+            stamp = self._file_stamp(path)
+            header = read_header(path)
+            if header is None:
+                sid = path.parent.name
+                proj = self._proj(sid)
+                meta = self._error_meta(
+                    sid, proj, path, stamp, workspace_map, workspace_by_path,
+                    pinned, archived,
+                    "无法读取会话头（文件可能正在写入或已损坏）",
+                )
             else:
-                sid_guess = path.parent.name
-                proj = self._proj(sid_guess)
-                try:
-                    session = parse_session_file(path, proj)
-                except Exception as exc:
-                    session = {
-                        "id": sid_guess,
-                        "path": str(path),
-                        "title": f"（无法读取）{path.name}",
-                        "cwd": "",
-                        "created_at": 0,
-                        "last_activity_at": 0,
-                        "model": "",
-                        "provider": "",
-                        "turns": [],
-                        "real_turn_count": 0,
-                        "message_count": 0,
-                        "tokens": {},
-                        "stats": {},
-                        "error": f"{type(exc).__name__}: {exc}",
-                    }
-                self._cache[key] = _CacheEntry(stamp, session)
+                sid = str(header.get("id") or path.parent.name)
+                proj = self._proj(sid)
+                meta = self._build_meta(
+                    sid, header, proj, path, stamp, workspace_map,
+                    workspace_by_path, pinned, archived,
+                )
 
-            if not session:
-                continue
-            sid = str(session.get("id") or path.parent.name)
-            proj = self._proj(sid)
-            if proj:
-                if not session.get("title") or session["title"] == "(无标题)":
-                    session["title"] = proj.get("title") or session["title"]
-                if not session.get("model"):
-                    session["model"] = proj.get("model") or ""
-                if not session.get("provider"):
-                    session["provider"] = proj.get("provider") or ""
-                session["tokens"] = session.get("tokens") or proj.get("tokens") or {}
-                session["stats"] = session.get("stats") or proj.get("stats") or {}
-                if not session.get("cwd"):
-                    session["cwd"] = proj.get("cwd") or session.get("cwd") or ""
-            session["pinned"] = sid in pinned
-            session["archived"] = sid in archived
-            session["workspace"] = workspace_map.get(sid) or {
-                "id": "",
-                "path": session.get("cwd") or "",
-                "title": Path(session.get("cwd") or "").name or "(未知工作目录)",
-            }
-            session["questions"] = len(session.get("turns") or [])
-            session["answered"] = sum(
-                1 for t in session.get("turns") or []
-                if (t.get("answer") or "").strip() or t.get("calls_payload")
-            )
-            session["open"] = bool(
-                session.get("turns") and session["turns"][-1].get("open")
-            )
-            by_id[sid] = session
-            chats.append(session)
+            loaded = self._sessions.get(sid)
+            if loaded is not None and stamp is not None and loaded.stamp == stamp:
+                # Keep the exact counts once a session has been opened, even if
+                # a later metadata refresh produced a lower estimate.
+                self._apply_loaded_meta(meta, loaded.data)
+            elif loaded is not None:
+                self._sessions.pop(sid, None)
+
+            by_id[sid] = meta
+            chats.append(meta)
 
         chats.sort(
             key=lambda c: (
@@ -1492,12 +1717,40 @@ class Store:
         self._chats = chats
         self._by_id = by_id
         self._stamp = self._current_stamp(self._files())
-        # drop cache entries whose files disappeared
+        for sid in list(self._sessions):
+            if sid not in by_id:
+                self._sessions.pop(sid, None)
         for key in list(self._cache):
-            if key.startswith("proj:") or key in seen_paths:
-                continue
-            if key not in seen_paths:
+            if key.startswith("proj:") and key[5:] not in by_id:
                 self._cache.pop(key, None)
+
+    def _ensure_loaded(self, sid: str) -> dict | None:
+        """Parse one session log, once, the first time its content is needed."""
+        self.ensure()
+        meta = self._by_id.get(sid)
+        if meta is None:
+            return None
+        path = Path(str(meta.get("path") or ""))
+        stamp = self._file_stamp(path)
+        with self._load_lock:
+            cached = self._sessions.get(sid)
+            if cached is not None and stamp is not None and cached.stamp == stamp:
+                return cached.data
+            proj = self._proj(sid)
+            try:
+                session = parse_session_file(path, proj)
+            except Exception as exc:
+                meta["error"] = f"{type(exc).__name__}: {exc}"
+                self._sessions.pop(sid, None)
+                return None
+            if session is None:
+                meta["error"] = "无法解析会话头"
+                self._sessions.pop(sid, None)
+                return None
+            self._sessions[sid] = _LoadedSession(stamp, session)
+            current = self._by_id.get(sid) or meta
+            self._apply_loaded_meta(current, session)
+            return session
 
     # -- public ------------------------------------------------------------
     def chats(self) -> list[dict]:
@@ -1509,8 +1762,8 @@ class Store:
         return self._by_id.get(sid)
 
     def turns(self, sid: str) -> list[dict]:
-        chat = self.chat(sid)
-        return chat.get("turns") if chat else []
+        session = self._ensure_loaded(sid)
+        return session.get("turns") if session else []
 
     def turn(self, sid: str, seq: int) -> dict | None:
         for turn in self.turns(sid):
@@ -1525,7 +1778,11 @@ class Store:
             "sessions_root": str(self.sessions_root),
             "sessions": len(chats),
             "questions": sum(c.get("questions") or 0 for c in chats),
-            "workspaces": len({(c.get("workspace") or {}).get("id") or (c.get("workspace") or {}).get("path") for c in chats}),
+            "workspaces": len({
+                (c.get("workspace") or {}).get("id") or (c.get("workspace") or {}).get("path")
+                for c in chats
+            }),
+            "loaded": sum(1 for c in chats if c.get("loaded")),
         }
 
     def search(self, term: str, sid: str | None, scope: str, limit: int) -> list[dict]:
@@ -1534,7 +1791,7 @@ class Store:
         for chat in self.chats():
             if sid and chat["id"] != sid:
                 continue
-            for turn in chat.get("turns") or []:
+            for turn in self.turns(chat["id"]):
                 in_q = needle in (turn.get("q") or "").casefold()
                 in_a = needle in (turn.get("answer") or "").casefold()
                 if scope == "q" and not in_q:

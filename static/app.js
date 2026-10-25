@@ -19,6 +19,7 @@ const state = {
   searchAll: false,
   searchResults: null,
   follow: true,
+  questionsLoading: false,
 };
 
 const esc = (s) => String(s == null ? '' : s)
@@ -703,13 +704,15 @@ function renderChats() {
       }
       if (chat.pinned) sub.appendChild(badge('置顶', 'pin'));
       if (chat.archived) sub.appendChild(badge('归档', 'arch'));
+      if (chat.origin === 'subagent') sub.appendChild(badge('子会话', 'src'));
       if (chat.model) {
         const model = document.createElement('span');
         model.textContent = chat.model;
         sub.appendChild(model);
       }
       li.append(title, sub);
-      li.title = [chat.title, chat.cwd, chat.model, chat.id, chat.error].filter(Boolean).join('\n');
+      li.title = [chat.title, chat.cwd, chat.model, chat.id, chat.parent, chat.error]
+        .filter(Boolean).join('\n');
       li.onclick = () => openChat(chat.id);
       list.appendChild(li);
     }
@@ -722,8 +725,14 @@ async function openChat(sid, opts = {}) {
   state.sid = sid;
   state.chat = state.chats.find((c) => c.id === sid) || { id: sid, title: sid };
   renderChats();
-  $('#q-head').textContent = '提问列表';
-  await loadQuestions();
+  $('#q-head').textContent = '正在读取会话…';
+  $('#q-count').textContent = '';
+  $('#question-list').innerHTML = '<li class="empty-note">正在读取会话日志，第一次打开大会话可能需要几秒…</li>';
+  const ok = await loadQuestions();
+  if (!ok) {
+    showAnswerError('读取会话失败');
+    return;
+  }
   if (opts.qid) {
     const ids = state.turns.map((t) => t.q_id);
     if (ids.includes(opts.qid)) return openTurn(opts.qid);
@@ -739,7 +748,7 @@ async function openChat(sid, opts = {}) {
   }
 }
 
-function clearAnswer() {
+function clearAnswer(message = '这个会话还没有提问。') {
   const box = $('#answer-body');
   state.turn = null;
   state.qid = null;
@@ -747,22 +756,60 @@ function clearAnswer() {
   box.classList.add('empty');
   box.textContent = '';
   const p = document.createElement('p');
-  p.textContent = '这个会话还没有提问。';
+  p.textContent = message;
   box.appendChild(p);
 }
 
+function showAnswerError(message) {
+  const box = $('#answer-body');
+  state.turn = null;
+  $('#a-head').textContent = '读取失败';
+  box.classList.remove('empty');
+  box.textContent = '';
+  const p = document.createElement('p');
+  p.textContent = message + '。请稍后重试，或点右上角“刷新”。';
+  box.appendChild(p);
+}
+
+let questionsRequest = 0;
 async function loadQuestions() {
-  if (!state.sid) return;
+  if (!state.sid) { state.questionsLoading = false; return false; }
+  const sid = state.sid;
+  const requestId = ++questionsRequest;
+  state.questionsLoading = true;
   const params = new URLSearchParams();
   if (state.term) { params.set('q', state.term); params.set('scope', state.scope); }
-  const data = await api(`/api/chats/${encodeURIComponent(state.sid)}/questions?${params}`);
-  state.chat = data.chat || state.chat;
-  state.turns = data.questions || [];
-  state.total = data.total || 0;
-  const title = (state.chat && state.chat.title) || '提问列表';
-  $('#q-head').textContent = `提问 · ${title}`;
-  $('#q-head').title = title;
-  renderQuestions();
+  const list = $('#question-list');
+  const count = $('#q-count');
+  const timer = setTimeout(() => {
+    if (state.sid !== sid || requestId !== questionsRequest) return;
+    $('#q-head').textContent = '正在读取会话…';
+    count.textContent = '';
+    list.innerHTML = '<li class="empty-note">正在读取会话日志，第一次打开大会话可能需要几秒…</li>';
+  }, 250);
+  try {
+    const data = await api(`/api/chats/${encodeURIComponent(sid)}/questions?${params}`);
+    if (state.sid !== sid || requestId !== questionsRequest) return false;
+    state.chat = data.chat || state.chat;
+    state.turns = data.questions || [];
+    state.total = data.total || 0;
+    const title = (state.chat && state.chat.title) || '提问列表';
+    $('#q-head').textContent = `提问 · ${title}`;
+    $('#q-head').title = title;
+    renderQuestions();
+    return true;
+  } catch (e) {
+    if (state.sid !== sid || requestId !== questionsRequest) return false;
+    state.turns = [];
+    state.total = 0;
+    $('#q-head').textContent = '读取失败';
+    count.textContent = '';
+    list.innerHTML = '<li class="empty-note">读取会话失败：' + esc(e.message) + '</li>';
+    return false;
+  } finally {
+    clearTimeout(timer);
+    if (requestId === questionsRequest) state.questionsLoading = false;
+  }
 }
 
 function renderQuestions() {
@@ -821,13 +868,33 @@ function renderQuestions() {
 
 /* ---------------- global search ---------------- */
 let searchTimer = null;
+let searchRequest = 0;
 async function runGlobalSearch() {
   const term = state.term.trim();
   if (!term) { await loadQuestions(); return; }
+  const requestId = ++searchRequest;
   const params = new URLSearchParams({ q: term, scope: state.scope, limit: '300' });
-  const data = await api(`/api/search?${params}`);
-  state.searchResults = data.results || [];
-  renderSearchResults(term);
+  const list = $('#question-list');
+  const count = $('#q-count');
+  const timer = setTimeout(() => {
+    if (requestId !== searchRequest) return;
+    $('#q-head').textContent = '正在搜索全部会话…';
+    count.textContent = '';
+    list.innerHTML = '<li class="empty-note">首次搜索需要读取所有会话日志，请稍候…</li>';
+  }, 250);
+  try {
+    const data = await api(`/api/search?${params}`);
+    if (requestId !== searchRequest || state.term.trim() !== term) return;
+    state.searchResults = data.results || [];
+    renderSearchResults(term);
+  } catch (e) {
+    if (requestId !== searchRequest) return;
+    $('#q-head').textContent = '搜索失败';
+    count.textContent = '';
+    list.innerHTML = '<li class="empty-note">搜索失败：' + esc(e.message) + '</li>';
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function renderSearchResults(term) {
@@ -1033,7 +1100,7 @@ async function tick() {
   if (state.searchAll && state.term.trim()) return;   // don't fight the global search view
   try {
     await loadChats();
-    if (!state.sid) return;
+    if (!state.sid || state.questionsLoading) return;
     const prevIds = state.turns.map((t) => t.q_id);
     const wasLastSelected = prevIds.length && prevIds[prevIds.length - 1] === state.qid;
     await loadQuestions();
@@ -1261,7 +1328,12 @@ document.addEventListener('keydown', (e) => {
     const meta = await api('/api/meta');
     window.__home = `home：${meta.home}`;
     await loadChats();
-    if (state.chats.length) await openChat(state.chats[0].id);
+    if (state.chats.length) {
+      $('#q-head').textContent = '选择一个会话';
+      $('#q-count').textContent = `${state.chats.length} 个会话`;
+      $('#question-list').innerHTML =
+        '<li class="empty-note">从左侧选择会话；点开后才读取完整日志。</li>';
+    }
     setInterval(tick, 3000);
   } catch (e) {
     $('#meta').textContent = '加载失败：' + e.message;

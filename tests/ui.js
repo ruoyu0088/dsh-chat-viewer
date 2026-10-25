@@ -48,7 +48,13 @@ const txt = (el) => (el && el.textContent != null ? String(el.textContent).repla
   check('页面启动', await waitFor(() => $$('#chat-list li').length > 0));
   check('无 JS 错误', errors.length === 0, errors.slice(0, 2).join(' | '));
   check('会话按 workspace 分组', $$('#chat-list li.grp').length > 0, `${$$('#chat-list li.grp').length} 组`);
-  check('提问列表已加载', await waitFor(() => $$('#question-list li[data-qid]').length > 0));
+  check('启动时不自动读取会话日志', $$('#question-list li[data-qid]').length === 0
+    && !!$('#answer-body.empty'));
+
+  // The first session is loaded only after clicking it.
+  $$('#chat-list li[data-sid]')[0].dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  check('点击会话后加载提问列表', await waitFor(() => $$('#question-list li[data-qid]').length > 0));
+  $$('#question-list li[data-qid]')[0].dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
   check('回答已渲染', await waitFor(() => !!$('#answer-body .md')));
   check('工具卡已渲染', $$('#answer-body .call').length > 0, `${$$('#answer-body .call').length} 张`);
 
@@ -73,8 +79,10 @@ const txt = (el) => (el && el.textContent != null ? String(el.textContent).repla
 
   const sessions = $$('#chat-list li[data-sid]');
   if (sessions.length > 1) {
+    const oldHead = txt($('#q-head'));
     sessions[1].dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
-    check('切换会话', await waitFor(() => $$('#question-list li[data-qid]').length > 0));
+    check('切换会话', await waitFor(() => txt($('#q-head')) !== oldHead
+      && $$('#question-list li[data-qid]').length > 0));
   }
 
   // In-session search

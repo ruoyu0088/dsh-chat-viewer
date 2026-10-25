@@ -9,6 +9,9 @@ directly, in read-only mode, and serves a three pane UI:
 Only the Python standard library is used (http.server + compression.zstd,
 Python 3.14+).  Nothing in the DSH home is ever written or locked.
 
+Startup reads only each log's header frame and the projection cache; the full
+log is decompressed and parsed lazily when a session is opened.
+
 Run:  python server.py            (then open http://127.0.0.1:8766)
 """
 
@@ -32,6 +35,7 @@ from lib.dsh import (  # noqa: E402
     IMAGE_EXT,
     IMAGE_TYPE,
     Store,
+    calls_payload,
     dsh_home,
     normalize_path,
     preview,
@@ -91,6 +95,7 @@ def chat_json(chat: dict) -> dict:
         "tokens": chat.get("tokens") or {},
         "stats": chat.get("stats") or {},
         "error": chat.get("error"),
+        "loaded": bool(chat.get("loaded")),
     }
 
 
@@ -129,7 +134,7 @@ def turn_json(turn: dict) -> dict:
             {"step": r.get("step"), "text": _clip(r.get("text") or "", 120_000)}
             for r in (turn.get("reasoning") or [])
         ],
-        "calls": turn.get("calls_payload") or [],
+        "calls": calls_payload(turn),
         "tool_summary": turn.get("tool_summary") or [],
         "open": bool(turn.get("open")),
         "end_reason": turn.get("end_reason"),
@@ -317,8 +322,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self._error(404, "unknown session")
                 scope = q1("scope", "all")
                 term = q1("q").strip().casefold()
+                turns = self.store.turns(sid)
+                chat = self.store.chat(sid) or chat
+                if chat.get("error") and not turns:
+                    return self._error(500, str(chat["error"]))
                 items = []
-                for turn in chat.get("turns") or []:
+                for turn in turns:
                     if term:
                         hay = ((turn.get("q") or "") + "\n" + (turn.get("answer") or "")).casefold()
                         if scope == "q":
@@ -330,7 +339,7 @@ class Handler(BaseHTTPRequestHandler):
                     items.append(question_json(turn))
                 return self._json({
                     "chat": chat_json(chat),
-                    "total": len(chat.get("turns") or []),
+                    "total": len(turns),
                     "questions": items,
                 })
 
@@ -346,6 +355,9 @@ class Handler(BaseHTTPRequestHandler):
                     return self._error(404, "unknown session")
                 turn = self.store.turn(sid, seq)
                 if turn is None:
+                    chat = self.store.chat(sid) or chat
+                    if chat.get("error"):
+                        return self._error(500, str(chat["error"]))
                     return self._error(404, "unknown turn")
                 payload = {"chat": chat_json(chat)}
                 payload.update(turn_json(turn))
