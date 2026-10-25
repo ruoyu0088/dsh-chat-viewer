@@ -1,0 +1,11 @@
+{
+  "name": "dsh-chat-viewer-tests",
+  "private": true,
+  "description": "Optional jsdom UI checks for DSH Chat Viewer",
+  "scripts": {
+    "ui": "node ui.js"
+  },
+  "devDependencies": {
+    "jsdom": "^30.1.0"
+  }
+}

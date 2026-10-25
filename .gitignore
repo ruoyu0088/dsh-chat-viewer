@@ -1,0 +1,5 @@
+__pycache__/
+*.py[cod]
+tests/node_modules/
+tests/_ui.png
+server.log
