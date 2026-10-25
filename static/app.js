@@ -492,7 +492,7 @@ function renderCalls(turn) {
   const maybeLoad = () => {
     if (!det.open) return;
     if (turn.callsLoaded) {
-      if (!body.childElementCount) renderCallList(body, turn);
+      if (!body.childElementCount) renderCallsPanel(body, turn);
       return;
     }
     loadTurnCalls(turn, body, det);
@@ -504,23 +504,171 @@ function renderCalls(turn) {
   });
 
   if (turn.callsLoaded) {
-    renderCallList(body, turn);
+    renderCallsPanel(body, turn);
   } else if (det.open) {
     maybeLoad();      // preserved open state after a re-render
   }
   return det;
 }
 
-function renderCallList(container, turn) {
-  container.textContent = '';
-  const calls = turn.calls || [];
-  calls.forEach((call, i) => container.appendChild(renderCall(call, i + 1, turn)));
-  if (!calls.length) {
-    const none = document.createElement('div');
-    none.className = 'call-none';
-    none.textContent = '（没有工具调用）';
-    container.appendChild(none);
+function callStateKey(call, idx) {
+  return String(call.id || `${call.name || 'tool'}-${idx}`);
+}
+
+function callSearchText(call) {
+  const base = [];
+  const output = [];
+  const add = (bucket, value) => {
+    if (value === undefined || value === null) return;
+    const text = String(value);
+    if (text.trim()) bucket.push(text);
+  };
+  add(base, call.name);
+  add(base, call.summary);
+  for (const info of call.info || []) add(base, info);
+  if (call.arg_view) {
+    add(base, call.arg_view.label);
+    add(base, call.arg_view.text);
   }
+  for (const q of call.questions || []) {
+    add(base, q.header);
+    add(base, q.question);
+    for (const option of q.options || []) {
+      add(base, option.label);
+      add(base, option.description);
+    }
+    for (const selected of q.selected || []) add(output, selected);
+    add(output, q.custom);
+  }
+  for (const todo of call.todos || []) {
+    add(base, todo.content);
+    add(base, todo.status);
+  }
+  for (const file of call.files || []) {
+    if (typeof file === 'string') add(base, file);
+    else if (file && typeof file === 'object') {
+      add(base, file.path || file.file || file.name);
+      add(base, file.description);
+    }
+  }
+  add(base, call.url);
+  for (const query of call.queries || []) add(base, query);
+  add(base, call.skill);
+
+  const res = call.result;
+  if (res) {
+    add(base, res.path);
+    add(base, res.exit_code);
+    if (res.exit_code !== undefined && res.exit_code !== null) {
+      add(base, `exit ${res.exit_code}`);
+    }
+    if (res.line_range) {
+      add(base, `${res.line_range.start}-${res.line_range.end}/${res.line_range.total || ''}`);
+    }
+    add(output, res.error);
+    for (const part of res.parts || []) add(output, part.text);
+    for (const image of res.images || []) {
+      add(output, image.path || image.id || image.url || refLabel(image));
+    }
+  }
+  if (call.job) {
+    add(base, call.job.status);
+    if (call.job.status) add(base, `job ${call.job.status}`);
+    add(base, call.job.duration_ms);
+    add(output, call.job.detail);
+  }
+  return {
+    base: base.join('\n').toLowerCase(),
+    output: output.join('\n').toLowerCase(),
+  };
+}
+
+function renderCallsPanel(container, turn) {
+  turn.callOpen = turn.callOpen || {};
+  if (turn.callFilter === undefined) turn.callFilter = '';
+  if (turn.filterOutput === undefined) turn.filterOutput = true;
+
+  container.textContent = '';
+  const toolbar = document.createElement('div');
+  toolbar.className = 'calls-toolbar';
+
+  const collapse = document.createElement('button');
+  collapse.type = 'button';
+  collapse.className = 'ghost tiny';
+  collapse.textContent = '折叠全部';
+
+  const expand = document.createElement('button');
+  expand.type = 'button';
+  expand.className = 'ghost tiny';
+  expand.textContent = '展开全部';
+
+  const filter = document.createElement('input');
+  filter.type = 'search';
+  filter.className = 'calls-filter';
+  filter.placeholder = '过滤工具（名称/路径/命令…）';
+  filter.value = turn.callFilter;
+  filter.setAttribute('aria-label', '按关键字过滤工具调用');
+
+  const outputLabel = document.createElement('label');
+  outputLabel.className = 'chk';
+  outputLabel.title = '勾选后连命令输出、diff、错误文本一起搜索；取消后只搜名称/摘要/路径/参数';
+  const outputToggle = document.createElement('input');
+  outputToggle.type = 'checkbox';
+  outputToggle.checked = turn.filterOutput !== false;
+  outputLabel.append(outputToggle, document.createTextNode(' 包含输出'));
+
+  const count = document.createElement('span');
+  count.className = 'hint calls-count';
+
+  toolbar.append(collapse, expand, filter, outputLabel, count);
+
+  const list = document.createElement('div');
+  list.className = 'calls-list';
+  const empty = document.createElement('div');
+  empty.className = 'call-none calls-empty';
+  empty.textContent = '没有匹配的工具';
+  empty.hidden = true;
+
+  const applyFilter = () => {
+    const term = String(turn.callFilter || '').trim().toLowerCase();
+    const includeOutput = turn.filterOutput !== false;
+    const cards = [...list.querySelectorAll('details.call')];
+    let visible = 0;
+    for (const card of cards) {
+      const hay = (card._searchBase || '')
+        + (includeOutput ? '\n' + (card._searchOutput || '') : '');
+      const show = !term || hay.includes(term);
+      card.classList.toggle('hidden', !show);
+      if (show) visible++;
+    }
+    count.textContent = `显示 ${visible} / 共 ${cards.length}`;
+    empty.hidden = visible !== 0 || cards.length === 0;
+  };
+
+  const setVisibleOpen = (open) => {
+    for (const card of list.querySelectorAll('details.call')) {
+      if (card.classList.contains('hidden')) continue;
+      card.open = open;
+      turn.callOpen[card.dataset.callKey] = open;
+    }
+  };
+
+  filter.addEventListener('input', () => {
+    turn.callFilter = filter.value;
+    applyFilter();
+  });
+  outputToggle.addEventListener('change', () => {
+    turn.filterOutput = outputToggle.checked;
+    applyFilter();
+  });
+  collapse.addEventListener('click', () => setVisibleOpen(false));
+  expand.addEventListener('click', () => setVisibleOpen(true));
+
+  container.append(toolbar, list, empty);
+
+  const calls = turn.calls || [];
+  calls.forEach((call, i) => list.appendChild(renderCall(call, i + 1, turn)));
+  applyFilter();
 }
 
 async function loadTurnCalls(turn, body, det) {
@@ -547,7 +695,12 @@ async function loadTurnCalls(turn, body, det) {
       const sum = det.querySelector('summary');
       if (sum) sum.textContent = callsSummary(current);
     }
-    if (body.isConnected) renderCallList(body, current);
+    if (body.isConnected) {
+      renderCallsPanel(body, current);
+    } else if (state.turn === current) {
+      // The answer was re-rendered while the call payload was loading.
+      renderAnswer();
+    }
   } catch (e) {
     if (body.isConnected) {
       body.textContent = '';
@@ -562,18 +715,23 @@ async function loadTurnCalls(turn, body, det) {
 }
 
 function renderCall(call, idx, turn) {
-  const card = document.createElement('div');
+  const card = document.createElement('details');
   card.className = 'call';
+  const key = callStateKey(call, idx);
+  card.dataset.callKey = key;
 
-  const head = document.createElement('div');
+  const head = document.createElement('summary');
   head.className = 'call-head';
+  const toggle = document.createElement('span');
+  toggle.className = 'call-toggle';
+  toggle.textContent = '▸';
   const num = document.createElement('span');
   num.className = 'call-idx';
   num.textContent = idx;
   const name = document.createElement('span');
   name.className = 'call-name';
   name.textContent = call.name;
-  head.append(num, name);
+  head.append(toggle, num, name);
   if (call.summary) {
     const s = document.createElement('span');
     s.className = 'call-sum';
@@ -581,7 +739,6 @@ function renderCall(call, idx, turn) {
     s.title = call.summary;
     head.appendChild(s);
   }
-  card.appendChild(head);
 
   const res = call.result;
   const badges = document.createElement('div');
@@ -608,88 +765,105 @@ function renderCall(call, idx, turn) {
     }
   }
   if (!res && turn && turn.open) badges.appendChild(badge('运行中…', 'open'));
-  if (badges.children.length) card.appendChild(badges);
+  if (badges.children.length) head.appendChild(badges);
 
-  if (Array.isArray(call.info) && call.info.length) {
-    const info = document.createElement('div');
-    info.className = 'call-info';
-    for (const value of call.info) {
-      if (!value) continue;
-      const chip = document.createElement('span');
-      chip.className = 'call-chip';
-      chip.textContent = value;
-      chip.title = value;
-      info.appendChild(chip);
+  const body = document.createElement('div');
+  body.className = 'call-body';
+  card.append(head, body);
+
+  const search = callSearchText(call);
+  card._searchBase = search.base;
+  card._searchOutput = search.output;
+
+  const buildBody = () => {
+    if (body.dataset.built === '1') return;
+    body.dataset.built = '1';
+
+    if (Array.isArray(call.info) && call.info.length) {
+      const info = document.createElement('div');
+      info.className = 'call-info';
+      for (const value of call.info) {
+        if (!value) continue;
+        const chip = document.createElement('span');
+        chip.className = 'call-chip';
+        chip.textContent = value;
+        chip.title = value;
+        info.appendChild(chip);
+      }
+      if (info.children.length) body.appendChild(info);
     }
-    if (info.children.length) card.appendChild(info);
-  }
 
-  // Structured tool-specific views -------------------------------------
-  if (Array.isArray(call.questions) && call.questions.length) {
-    const ask = renderAskQuestions(call.questions);
-    if (ask) card.appendChild(ask);
-  }
-  if (Array.isArray(call.todos) && call.todos.length) {
-    const todos = renderTodos(call.todos, '待办');
-    if (todos) card.appendChild(todos);
-  }
-  if (Array.isArray(call.files) && call.files.length) {
-    const files = renderPresentFiles(call.files);
-    if (files) card.appendChild(files);
-  }
-
-  // Arguments: command / code / diff / JSON ----------------------------
-  if (call.arg_view && call.arg_view.text) {
-    card.appendChild(codeBlock(
-      call.arg_view.text,
-      call.arg_view.lang,
-      call.arg_view.label
-    ));
-  }
-
-  if (!res) {
-    const none = document.createElement('div');
-    none.className = 'call-none';
-    none.textContent = (turn && turn.open)
-      ? '这个调用还没有结果（可能仍在运行）。'
-      : '没有配到工具结果：这一轮被中断，或结果未入库。';
-    card.appendChild(none);
-    return card;
-  }
-
-  if (res.error) card.appendChild(codeBlock(res.error, 'plaintext', '错误信息'));
-  (res.images || []).forEach((ref) => card.appendChild(imageFig(ref)));
-
-  if (call.name === 'todo_write') {
-    // The result is just "Updated todo list..." — keep it as a small note.
-    const parts = (res.parts || []).filter((p) => p.text && p.text.trim());
-    if (parts.length) {
-      const note = document.createElement('div');
-      note.className = 'call-note';
-      note.textContent = parts.map((p) => p.text).join('\n').slice(0, 600);
-      card.appendChild(note);
+    if (Array.isArray(call.questions) && call.questions.length) {
+      const ask = renderAskQuestions(call.questions);
+      if (ask) body.appendChild(ask);
     }
-    return card;
-  }
-  if (call.name === 'ask_user_question') {
-    return card;   // questions / selected answers already rendered above
-  }
+    if (Array.isArray(call.todos) && call.todos.length) {
+      const todos = renderTodos(call.todos, '待办');
+      if (todos) body.appendChild(todos);
+    }
+    if (Array.isArray(call.files) && call.files.length) {
+      const files = renderPresentFiles(call.files);
+      if (files) body.appendChild(files);
+    }
 
-  const parts = res.parts || [];
-  parts.forEach((part) => {
-    if (!part.text || !part.text.trim()) return;
-    const label = part.label && !/^(output|content|result|结果|输出)$/.test(part.label)
-      ? part.label
-      : (part.kind === 'diff' ? 'diff' : '输出');
-    card.appendChild(codeBlock(part.text, part.lang, label));
+    if (call.arg_view && call.arg_view.text) {
+      body.appendChild(codeBlock(
+        call.arg_view.text,
+        call.arg_view.lang,
+        call.arg_view.label
+      ));
+    }
+
+    if (!res) {
+      const none = document.createElement('div');
+      none.className = 'call-none';
+      none.textContent = (turn && turn.open)
+        ? '这个调用还没有结果（可能仍在运行）。'
+        : '没有配到工具结果：这一轮被中断，或结果未入库。';
+      body.appendChild(none);
+      return;
+    }
+
+    if (res.error) body.appendChild(codeBlock(res.error, 'plaintext', '错误信息'));
+    (res.images || []).forEach((ref) => body.appendChild(imageFig(ref)));
+
+    if (call.name === 'todo_write') {
+      const parts = (res.parts || []).filter((p) => p.text && p.text.trim());
+      if (parts.length) {
+        const note = document.createElement('div');
+        note.className = 'call-note';
+        note.textContent = parts.map((p) => p.text).join('\n').slice(0, 600);
+        body.appendChild(note);
+      }
+      return;
+    }
+    if (call.name === 'ask_user_question') {
+      return;   // questions / selected answers already rendered above
+    }
+
+    const parts = res.parts || [];
+    parts.forEach((part) => {
+      if (!part.text || !part.text.trim()) return;
+      const label = part.label && !/^(output|content|result|结果|输出)$/.test(part.label)
+        ? part.label
+        : (part.kind === 'diff' ? 'diff' : '输出');
+      body.appendChild(codeBlock(part.text, part.lang, label));
+    });
+
+    if (!parts.length && !(res.images || []).length && !res.error) {
+      const none = document.createElement('div');
+      none.className = 'call-none';
+      none.textContent = '（没有输出）';
+      body.appendChild(none);
+    }
+  };
+
+  card.addEventListener('toggle', () => {
+    turn.callOpen[key] = card.open;
+    if (card.open) buildBody();
   });
-
-  if (!parts.length && !(res.images || []).length && !res.error) {
-    const none = document.createElement('div');
-    none.className = 'call-none';
-    none.textContent = '（没有输出）';
-    card.appendChild(none);
-  }
+  card.open = !!(turn.callOpen && turn.callOpen[key]);
+  if (card.open) buildBody();
   return card;
 }
 
@@ -1036,10 +1210,16 @@ function adoptTurn(data) {
     data.callsLoaded = !!prev.callsLoaded && sameRevision;
     data.calls = data.callsLoaded ? (prev.calls || []) : [];
     data.callsLoading = false;
+    data.callOpen = prev.callOpen || {};
+    data.callFilter = prev.callFilter || '';
+    data.filterOutput = prev.filterOutput !== false;
   } else {
     data.callsOpen = false;
     data.callsLoaded = false;
     data.calls = [];
+    data.callOpen = {};
+    data.callFilter = '';
+    data.filterOutput = true;
   }
   state.turn = data;
 }
