@@ -36,6 +36,7 @@ from lib.dsh import (  # noqa: E402
     IMAGE_TYPE,
     Store,
     calls_payload,
+    calls_revision,
     dsh_home,
     normalize_path,
     preview,
@@ -134,7 +135,9 @@ def turn_json(turn: dict) -> dict:
             {"step": r.get("step"), "text": _clip(r.get("text") or "", 120_000)}
             for r in (turn.get("reasoning") or [])
         ],
-        "calls": calls_payload(turn),
+        "calls": [],
+        "call_count": len(turn.get("calls") or []),
+        "calls_revision": calls_revision(turn),
         "tool_summary": turn.get("tool_summary") or [],
         "open": bool(turn.get("open")),
         "end_reason": turn.get("end_reason"),
@@ -341,6 +344,30 @@ class Handler(BaseHTTPRequestHandler):
                     "chat": chat_json(chat),
                     "total": len(turns),
                     "questions": items,
+                })
+
+            # /api/turn/<sid>/<seq>/calls — rendered only when the user expands
+            if len(parts) == 5 and parts[:2] == ["api", "turn"] and parts[4] == "calls":
+                sid = parts[2]
+                try:
+                    seq = int(parts[3])
+                except ValueError:
+                    return self._error(400, "bad turn sequence")
+                chat = self.store.chat(sid)
+                if chat is None:
+                    return self._error(404, "unknown session")
+                turn = self.store.turn(sid, seq)
+                if turn is None:
+                    chat = self.store.chat(sid) or chat
+                    if chat.get("error"):
+                        return self._error(500, str(chat["error"]))
+                    return self._error(404, "unknown turn")
+                return self._json({
+                    "seq": seq,
+                    "q_id": turn.get("q_id"),
+                    "calls": calls_payload(turn),
+                    "call_count": len(turn.get("calls") or []),
+                    "calls_revision": calls_revision(turn),
                 })
 
             # /api/turn/<sid>/<seq>

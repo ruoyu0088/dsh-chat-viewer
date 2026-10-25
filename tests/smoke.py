@@ -131,10 +131,16 @@ def main() -> int:
             check("turn", status == 200 and turn.get("q") == "第一轮问题：列一下文件。")
             check("answer", "第一轮回答的第一段。" in (turn.get("answer") or "")
                   and "第一轮回答的第二段。" in (turn.get("answer") or ""))
-            pwsh = next((c for c in turn.get("calls", []) if c.get("name") == "pwsh"), None)
+            check("tool calls deferred", turn.get("calls") == []
+                  and turn.get("call_count", 0) >= 4 and bool(turn.get("calls_revision")))
+
+            status, calls_doc = get_json(base, f"/api/turn/{quote(SID)}/2/calls")
+            calls = calls_doc.get("calls") or []
+            check("lazy calls endpoint", status == 200 and len(calls) == turn.get("call_count"))
+            pwsh = next((c for c in calls if c.get("name") == "pwsh"), None)
             check("pwsh tool result", bool(pwsh) and pwsh["result"]["exit_code"] == 1
                   and pwsh["job"]["duration_ms"] == 100)
-            ask = next((c for c in turn.get("calls", []) if c.get("name") == "ask_user_question"), None)
+            ask = next((c for c in calls if c.get("name") == "ask_user_question"), None)
             check("ask custom answer", bool(ask)
                   and ask["questions"][1]["custom"] == "自定义回答")
 

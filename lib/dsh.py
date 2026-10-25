@@ -17,6 +17,7 @@ package is required.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -917,6 +918,25 @@ def calls_payload(turn: dict) -> list[dict]:
     contents for every turn is expensive and only the opened turn needs it.
     """
     return [call_payload(call) for call in (turn.get("calls") or [])]
+
+
+def calls_revision(turn: dict) -> str:
+    """Cheap signature of a turn's call ids and result sizes.
+
+    The UI uses it to decide whether its cached, already-expanded tool cards
+    are still current while a live answer keeps growing.
+    """
+    digest = hashlib.blake2b(digest_size=8)
+    for call in turn.get("calls") or []:
+        digest.update(str(call.get("id") or "").encode("utf-8", "replace"))
+        digest.update(b"\0")
+        result = call.get("result_text")
+        digest.update(b"1" if result is not None else b"0")
+        digest.update(str(len(result or "")).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(b"1" if call.get("is_error") else b"0")
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
 # ---------------------------------------------------------------------------

@@ -465,20 +465,100 @@ function renderPresentFiles(files) {
 }
 
 /* ---------------- tool calls ---------------- */
+function callsSummary(turn) {
+  const total = Number(turn.call_count)
+    || (turn.tool_summary || []).reduce((a, x) => a + (x.count || 0), 0);
+  const names = (turn.tool_summary || [])
+    .map((x) => `${x.name}×${x.count}`).join('、');
+  return `工具调用（${total} 次${names ? '：' + names : ''}）`
+    + (turn.callsLoaded ? '' : ' · 展开后加载');
+}
+
 function renderCalls(turn) {
-  const calls = turn.calls || [];
-  if (!calls.length) return null;
+  const total = Number(turn.call_count)
+    || (turn.tool_summary || []).reduce((a, x) => a + (x.count || 0), 0);
+  if (!total) return null;
+
   const det = document.createElement('details');
   det.className = 'calls';
-  det.open = true;
+  det.open = !!turn.callsOpen;
+
   const sum = document.createElement('summary');
-  const names = {};
-  calls.forEach((c) => { names[c.name] = (names[c.name] || 0) + 1; });
-  sum.textContent = `工具调用（${calls.length} 次：` +
-    Object.entries(names).map(([n, c]) => `${n}×${c}`).join('、') + '）';
-  det.appendChild(sum);
-  calls.forEach((c, i) => det.appendChild(renderCall(c, i + 1, turn)));
+  sum.textContent = callsSummary(turn);
+  const body = document.createElement('div');
+  body.className = 'calls-body';
+  det.append(sum, body);
+
+  const maybeLoad = () => {
+    if (!det.open) return;
+    if (turn.callsLoaded) {
+      if (!body.childElementCount) renderCallList(body, turn);
+      return;
+    }
+    loadTurnCalls(turn, body, det);
+  };
+
+  det.addEventListener('toggle', () => {
+    turn.callsOpen = det.open;
+    if (det.open) maybeLoad();
+  });
+
+  if (turn.callsLoaded) {
+    renderCallList(body, turn);
+  } else if (det.open) {
+    maybeLoad();      // preserved open state after a re-render
+  }
   return det;
+}
+
+function renderCallList(container, turn) {
+  container.textContent = '';
+  const calls = turn.calls || [];
+  calls.forEach((call, i) => container.appendChild(renderCall(call, i + 1, turn)));
+  if (!calls.length) {
+    const none = document.createElement('div');
+    none.className = 'call-none';
+    none.textContent = '（没有工具调用）';
+    container.appendChild(none);
+  }
+}
+
+async function loadTurnCalls(turn, body, det) {
+  if (turn.callsLoading) return;
+  const qid = turn.q_id;
+  const revision = turn.calls_revision;
+  turn.callsLoading = true;
+  body.textContent = '';
+  const loading = document.createElement('div');
+  loading.className = 'call-none';
+  loading.textContent = '正在加载工具调用…';
+  body.appendChild(loading);
+  try {
+    const [sid, seq] = splitQid(qid);
+    const data = await api(
+      `/api/turn/${encodeURIComponent(sid)}/${encodeURIComponent(seq)}/calls`
+    );
+    const current = state.turn;
+    if (!current || current.q_id !== qid || current.calls_revision !== revision) return;
+    current.calls = data.calls || [];
+    current.callsLoaded = true;
+    current.call_count = data.call_count || current.calls.length;
+    if (det) {
+      const sum = det.querySelector('summary');
+      if (sum) sum.textContent = callsSummary(current);
+    }
+    if (body.isConnected) renderCallList(body, current);
+  } catch (e) {
+    if (body.isConnected) {
+      body.textContent = '';
+      const note = document.createElement('div');
+      note.className = 'call-none';
+      note.textContent = '加载工具调用失败：' + e.message;
+      body.appendChild(note);
+    }
+  } finally {
+    turn.callsLoading = false;
+  }
 }
 
 function renderCall(call, idx, turn) {
@@ -939,17 +1019,38 @@ function renderSearchResults(term) {
 }
 
 /* ---------------- answer ---------------- */
-async function openTurn(qid) {
-  state.qid = qid;
-  let sid = state.sid;
-  let seq = qid;
-  const at = String(qid).lastIndexOf(':');
-  if (at > 0) {
-    sid = String(qid).slice(0, at);
-    seq = String(qid).slice(at + 1);
+let turnRequest = 0;
+
+function splitQid(qid) {
+  const text = String(qid);
+  const at = text.lastIndexOf(':');
+  if (at > 0) return [text.slice(0, at), text.slice(at + 1)];
+  return [state.sid, text];
+}
+
+function adoptTurn(data) {
+  const prev = state.turn;
+  if (prev && prev.q_id === data.q_id) {
+    const sameRevision = prev.calls_revision === data.calls_revision;
+    data.callsOpen = !!prev.callsOpen;
+    data.callsLoaded = !!prev.callsLoaded && sameRevision;
+    data.calls = data.callsLoaded ? (prev.calls || []) : [];
+    data.callsLoading = false;
+  } else {
+    data.callsOpen = false;
+    data.callsLoaded = false;
+    data.calls = [];
   }
-  const data = await api(`/api/turn/${encodeURIComponent(sid)}/${encodeURIComponent(seq)}`);
   state.turn = data;
+}
+
+async function openTurn(qid) {
+  const requestId = ++turnRequest;
+  state.qid = qid;
+  const [sid, seq] = splitQid(qid);
+  const data = await api(`/api/turn/${encodeURIComponent(sid)}/${encodeURIComponent(seq)}`);
+  if (requestId !== turnRequest) return;
+  adoptTurn(data);
   state.raw = false;
   $('#btn-raw').classList.remove('on');
   renderAnswer();
@@ -1090,9 +1191,8 @@ function renderAnswer() {
 }
 
 /* ---------------- follow (live) ---------------- */
-function callsFingerprint(calls) {
-  return JSON.stringify((calls || []).map((c) => c.id + '|' + (c.result ? 'r' : '-') +
-    '|' + (c.result ? (c.result.parts || []).reduce((a, p) => a + (p.text || '').length, 0) : 0)));
+function callsFingerprint(turn) {
+  return `${(turn && turn.call_count) || 0}|${(turn && turn.calls_revision) || ''}`;
 }
 
 async function tick() {
@@ -1110,19 +1210,16 @@ async function tick() {
     if (!grew) {
       // same list — refresh the open answer if it is the newest one and still growing
       if (state.qid && ids[ids.length - 1] === state.qid) {
-        let data;
-        const at = String(state.qid).lastIndexOf(':');
-        const sid = at > 0 ? state.qid.slice(0, at) : state.sid;
-        const seq = at > 0 ? state.qid.slice(at + 1) : state.qid;
-        data = await api(`/api/turn/${encodeURIComponent(sid)}/${encodeURIComponent(seq)}`);
+        const [sid, seq] = splitQid(state.qid);
+        const data = await api(`/api/turn/${encodeURIComponent(sid)}/${encodeURIComponent(seq)}`);
         const before = (state.turn && state.turn.answer) || '';
         const changed = (data.answer || '') !== before ||
-          callsFingerprint(data.calls) !== callsFingerprint((state.turn || {}).calls) ||
+          callsFingerprint(data) !== callsFingerprint(state.turn) ||
           (data.reasoning || []).length !== ((state.turn || {}).reasoning || []).length;
         if (changed) {
           const box = $('#answer-body');
           const keep = box.scrollTop > 4 ? box.scrollTop : 0;
-          state.turn = data;
+          adoptTurn(data);
           renderAnswer();
           box.scrollTop = keep;
         }

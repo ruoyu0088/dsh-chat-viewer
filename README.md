@@ -20,7 +20,8 @@
 - **回答渲染**：Markdown、GFM 表格、KaTeX 数学公式、highlight.js 语法高亮、代码块复制/折叠、
   「原文」切换、搜索高亮。
 - **思考过程**：`assistant/message` 里的 `reasoning` 块默认折叠，按步骤展示，不污染回答正文。
-- **工具调用卡片**：按工具类型分别显示，而不是丢一段 JSON（详见下表）。
+- **工具调用卡片**：默认折叠，展开时才请求并渲染这一轮的工具卡（按工具类型分别显示，
+  而不是丢一段 JSON）。回答正文先出来，不被几十上百张卡片拖慢。
 - **图片**：Markdown 本地图片、DSH `image` 内容块、`@image:` / `MEDIA:` 路径、附件 id；
   点击放大、缺图提示；`/file` 只允许图片、限制 40 MB。
 - **搜索**：当前会话的提问/回答/全部；跨全部会话；搜索结果按会话分组。
@@ -65,8 +66,9 @@ DSH 的会话存储与 Hermes 的 SQLite `state.db` 完全不同，是**事件�
   `zstd.decompress()` 约 9.9 秒，`ZstdFile` 约 0.14 秒。尾帧不完整时保留已解出的完整前缀。
 - **JSONL 解析**：仍是标准库 `json.loads` 逐行解析（同例子 9,344 行约 0.25 秒），
   没有引入第三方 JSON 库；瓶颈在 zstd 的调用方式，不在 JSON。
-- **工具卡**：`tool/call` / `tool/result` 的正文、diff、命令输出只在打开具体提问时渲染，
-  不会在解析整个会话时为所有轮次预先格式化。
+- **工具卡**：`tool/call` / `tool/result` 的正文、diff、命令输出只在打开具体提问、并且展开
+  “工具调用”时，才通过 `/api/turn/{sid}/{seq}/calls` 渲染；不会在解析整个会话时为所有轮次
+  预先格式化，也不会在回答首次显示时创建几十上百张卡片。
 - 因此启动开销与历史总量基本无关；代价是第一次点开一个很大的会话需要等它解析完
   （本机最大会话约 30 MB 解压后，首次打开约 0.6 秒），之后就是缓存的。
 
@@ -108,6 +110,10 @@ DSH 的会话存储与 Hermes 的 SQLite `state.db` 完全不同，是**事件�
 
 每个代码块都可单独复制；超过 22 行自动折叠，可「展开全部」。
 结果里的 `MEDIA:` 图片、`<type>image</type>` 或 image 内容块会直接显示。
+
+工具卡默认**折叠**。摘要里显示总次数和 `pwsh×N` 之类的分布；展开时才请求
+`/api/turn/{sid}/{seq}/calls` 并创建卡片。回答流式更新时，已展开状态会保留；
+工具调用集合变化时用 `calls_revision` 检测，并自动重新加载当前轮的工具卡。
 
 ---
 
@@ -167,7 +173,8 @@ python server.py --home D:\dsh-home   :: 指定 DSH home（默认 %USERPROFILE%\
 | `GET /api/meta` | DSH home、会话数、提问数、workspace 数、已加载会话数 |
 | `GET /api/chats` | 所有会话的**元信息**（不解析完整日志；标题/目录/模型/token/提问数/置顶/归档/进行中/loaded） |
 | `GET /api/chats/{sid}/questions?q=&scope=q\|a\|all` | 该会话的提问列表；**首次调用**解析完整日志并缓存 |
-| `GET /api/turn/{sid}/{seq}` | 单条提问：完整提问、回答、思考、工具卡、压缩摘要、待办；首次调用解析并缓存 |
+| `GET /api/turn/{sid}/{seq}` | 单条提问：提问、回答、思考、压缩摘要、待办；工具卡只返回 `call_count` / `calls_revision`，不含卡片正文 |
+| `GET /api/turn/{sid}/{seq}/calls` | 展开“工具调用”时才调用：返回这一轮渲染好的工具卡（命令/diff/文件内容/图片等） |
 | `GET /api/search?q=&scope=&sid=&limit=` | 跨会话搜索（首次搜索会解析所有会话） |
 | `GET /file?path=<绝对路径>` | 只读提供**图片**文件（唯一允许的读取类型） |
 | `GET /attachment?id=<附件id>&sid=<会话id>` | 只读提供 DSH 图片附件（在已知附件目录中查找） |

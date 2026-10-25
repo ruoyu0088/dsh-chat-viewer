@@ -56,7 +56,16 @@ const txt = (el) => (el && el.textContent != null ? String(el.textContent).repla
   check('点击会话后加载提问列表', await waitFor(() => $$('#question-list li[data-qid]').length > 0));
   $$('#question-list li[data-qid]')[0].dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
   check('回答已渲染', await waitFor(() => !!$('#answer-body .md')));
-  check('工具卡已渲染', $$('#answer-body .call').length > 0, `${$$('#answer-body .call').length} 张`);
+  const callsDetails = $('#answer-body details.calls');
+  if (callsDetails) {
+    check('工具调用默认折叠', !callsDetails.open && $$('#answer-body .call').length === 0);
+    callsDetails.open = true;
+    callsDetails.dispatchEvent(new win.Event('toggle'));
+    check('展开后加载工具卡', await waitFor(() => $$('#answer-body .call').length > 0),
+      `${$$('#answer-body .call').length} 张`);
+  } else {
+    check('工具调用默认折叠', true, '本轮没有工具调用');
+  }
 
   const reasoning = $('#answer-body details.reasoning');
   if (reasoning) check('思考过程可折叠', true, txt(reasoning.querySelector('summary')));
