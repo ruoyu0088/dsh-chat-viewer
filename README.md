@@ -37,7 +37,7 @@ DSH 的会话存储与 Hermes 的 SQLite `state.db` 完全不同，是**事件�
 ```text
 %USERPROFILE%\.dsh\
   sessions\
-    --C-Users-ruoyu-Documents-project--\        # 规范化后的工作目录
+    --C-Users-alice-Documents-project--\        # 规范化后的工作目录
       session-<uuid>\
         session.v4.jsonl.zstd                    # 当前格式；也可能是 .jsonl / .v3 / .v2 ...
   storages\
@@ -142,15 +142,23 @@ DSH 的会话存储与 Hermes 的 SQLite `state.db` 完全不同，是**事件�
 
 ## 运行
 
-需要 **Python 3.14+**（标准库自带 `compression.zstd`）。本项目在
-`C:\pixi_env\.pixi\envs\default\python.exe`（Python 3.14.8）上开发，**不需要安装任何第三方包**。
+需要 **Python 3.14+**（标准库自带 `compression.zstd`），**不需要安装任何第三方 Python 包**。
 
-双击 `run.bat`，浏览器会自动打开 <http://127.0.0.1:8766>。
+双击 `run.bat` 即可。它按以下顺序寻找 Python，找到就启动，不需要改脚本：
+
+1. 环境变量 `DSH_VIEWER_PYTHON`（可选，指向任意 Python 3.14+ 的 `python.exe`）
+2. 本机开发环境 `C:\pixi_env\.pixi\envs\default\python.exe`
+3. `py -3.14`
+4. PATH 上的 `python`（版本必须 ≥ 3.14）
+
+所以在当前机器上仍然是双击直接运行；换机器时通常也不用改。
 
 命令行等价写法：
 
 ```bat
-C:\pixi_env\.pixi\envs\default\python.exe server.py
+py -3.14 server.py
+:: 或
+python server.py
 ```
 
 常用参数：
@@ -161,7 +169,8 @@ python server.py --no-open            :: 不自动开浏览器
 python server.py --home D:\dsh-home   :: 指定 DSH home（默认 %USERPROFILE%\.dsh 或 $DSH_HOME）
 ```
 
-> 如果 `run.bat` 里的 Python 路径不对，改 `PYEXE` 即可；也可以用任何 Python 3.14+ 运行 `server.py`。
+> 想让 `run.bat` 固定使用某个解释器，设置环境变量即可，例如：
+> `set DSH_VIEWER_PYTHON=C:\Python314\python.exe`。
 >
 > 启动后先出现会话列表（只读元信息）；点开某个会话后才读取它的完整日志，右侧/中栏会显示
 > “正在读取会话日志”。本机最大的会话首次打开约 0.6 秒，之后走缓存。
@@ -228,11 +237,12 @@ python server.py --home D:\dsh-home   :: 指定 DSH home（默认 %USERPROFILE%\
 | `static/index.html` | 三栏页面骨架 |
 | `static/app.js` | 前端逻辑（列表、搜索、高亮、图像、工具卡、跟随刷新） |
 | `static/style.css` | 样式（浅色/深色自动） |
-| `static/marked.min.js` | Markdown 渲染（本地副本，离线可用） |
-| `static/katex/` | KaTeX 数学公式（js/css/字体，本地副本，离线可用） |
-| `static/hljs*.js` / `hljs-*.css` | highlight.js 语法高亮（本地副本，离线可用） |
-| `run.bat` | 用 `C:\pixi_env` 的 Python 启动并打开浏览器 |
-| `THIRD_PARTY_NOTICES.md` | marked / KaTeX / highlight.js 的许可说明 |
+| `static/vendor/marked/12.0.2/` | Markdown 渲染（第三方，版本固定，离线可用） |
+| `static/vendor/katex/0.16.11/` | KaTeX 数学公式（js/css/字体，第三方，离线可用） |
+| `static/vendor/highlight.js/11.10.0/` | highlight.js 语法高亮（js/css，第三方，离线可用） |
+| `static/vendor/LICENSES/` / `static/vendor/README.md` | 第三方版本、来源和许可证 |
+| `run.bat` | 自动查找 Python 3.14+ 并启动浏览器（优先本机 pixi 环境） |
+| `THIRD_PARTY_NOTICES.md` | marked / KaTeX / highlight.js 的版本与许可说明 |
 | `tests/` | 解析器单测、HTTP 冒烟、可选 jsdom 页面测试 |
 
 ---
@@ -241,8 +251,8 @@ python server.py --home D:\dsh-home   :: 指定 DSH home（默认 %USERPROFILE%\
 
 ```bat
 cd tests
-C:\pixi_env\.pixi\envs\default\python.exe test_parser.py
-C:\pixi_env\.pixi\envs\default\python.exe smoke.py
+py -3.14 test_parser.py
+py -3.14 smoke.py
 ```
 
 页面测试（可选，需要 jsdom；先启动查看器）：

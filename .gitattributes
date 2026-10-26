@@ -1,0 +1,10 @@
+* text=auto
+
+# Windows launcher must stay CRLF for cmd.exe.
+run.bat text eol=crlf
+
+# Third-party browser bundles: not project source, and minified diffs are noise.
+static/vendor/** linguist-vendored=true
+static/vendor/**/*.min.js linguist-generated=true -diff
+static/vendor/**/*.css linguist-generated=true
+static/vendor/**/*.woff2 binary

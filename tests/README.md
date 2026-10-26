@@ -2,12 +2,12 @@
 
 三个层次，全部从**运行中的真实代码**取数据，不使用 mock。
 
-Python 解释器用 `C:\pixi_env\.pixi\envs\default\python.exe`（Python 3.14，自带 `compression.zstd`）。
+Python 需要 3.14+（自带 `compression.zstd`）。下面的示例用 `py -3.14`；如果使用本机 pixi 环境，可替换为 `C:\pixi_env\.pixi\envs\default\python.exe`。
 
 ## 1. 解析器单测（不需要启动服务）
 
 ```bat
-C:\pixi_env\.pixi\envs\default\python.exe test_parser.py
+py -3.14 test_parser.py
 ```
 
 `fixture.py` 会临时造一个 DSH home：多帧 zstd 日志、workspace/projcache 元数据、正常轮次、注入消息、中途插话、`pwsh` / `read` / `ask_user_question` / `todo_write` 工具结果。
@@ -28,7 +28,7 @@ C:\pixi_env\.pixi\envs\default\python.exe test_parser.py
 ## 2. HTTP 冒烟（自动起停服务）
 
 ```bat
-C:\pixi_env\.pixi\envs\default\python.exe smoke.py
+py -3.14 smoke.py
 ```
 
 自己找空闲端口，用临时 DSH home 启动 `server.py`，检查：
@@ -45,7 +45,7 @@ C:\pixi_env\.pixi\envs\default\python.exe smoke.py
 先启动查看器：
 
 ```bat
-C:\pixi_env\.pixi\envs\default\python.exe ..\server.py --port 8766
+py -3.14 ..\server.py --port 8766
 ```
 
 另开一个终端：
