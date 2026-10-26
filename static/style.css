@@ -12,6 +12,8 @@
   --ok: #157f3b;
   --bad: #c0392b;
   --warn: #9a6700;
+  --w-chats: 280px;
+  --w-questions: 360px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -99,8 +101,6 @@ select { width: auto; padding: 4px 4px; }
 main {
   flex: 1 1 auto;
   display: grid;
-  --w-chats: 280px;
-  --w-questions: 360px;
   grid-template-columns: var(--w-chats) 6px var(--w-questions) 6px minmax(360px, 1fr);
   min-height: 0;
   transition: grid-template-columns .18s ease;
