@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -11,81 +11,123 @@
 </head>
 <body>
 <header id="topbar">
+  <button id="btn-open-chats" class="topbar-drawer" type="button"
+          data-drawer="chats" aria-controls="pane-chats" aria-expanded="false"
+          data-i18n-title="Open sessions">
+    <span class="drawer-icon">☰</span>
+    <span class="drawer-label" data-i18n="Sessions">Sessions</span>
+  </button>
   <div class="brand">DSH <span>Chat Viewer</span></div>
-  <div class="meta" id="meta">加载中…</div>
+  <div class="meta" id="meta" data-i18n="Loading…">Loading…</div>
   <div class="tools">
-    <label class="chk" title="每 3 秒刷新一次；新提问和正在生成的回答会自动出现">
-      <input type="checkbox" id="follow" checked> 跟随最新
+    <button id="btn-open-questions" class="topbar-drawer" type="button"
+            data-drawer="questions" aria-controls="pane-questions" aria-expanded="false"
+            data-i18n-title="Open questions">
+      <span class="drawer-icon">≣</span>
+      <span class="drawer-label" data-i18n="Questions">Questions</span>
+    </button>
+    <label class="chk" data-i18n-title="Refresh every 3 seconds; new questions and streaming answers appear automatically">
+      <input type="checkbox" id="follow" checked>
+      <span data-i18n="Follow latest">Follow latest</span>
     </label>
-    <label class="chk" title="在会话列表中显示已归档的会话">
-      <input type="checkbox" id="show-archived" checked> 显示归档
+    <label class="chk" data-i18n-title="Show archived sessions in the list">
+      <input type="checkbox" id="show-archived" checked>
+      <span data-i18n="Show archived">Show archived</span>
     </label>
-    <button id="btn-refresh" class="ghost" title="立即刷新">刷新</button>
+    <button id="btn-refresh" class="ghost" data-i18n-title="Refresh now" data-i18n="Refresh">Refresh</button>
+    <select id="lang-select" class="lang-select" data-i18n-title="Language" aria-label="Language">
+      <option value="zh">中文</option>
+      <option value="en">English</option>
+    </select>
   </div>
 </header>
 
 <main>
   <!-- 1. all sessions -->
   <section class="pane" id="pane-chats">
-    <button class="rail" data-pane="chats" title="展开会话列表（Ctrl+B）">
-      <span class="rail-icon">»</span><span class="rail-label">会话</span>
+    <button class="rail" data-pane="chats" data-i18n-title="Expand sessions (Ctrl+B)">
+      <span class="rail-icon">»</span><span class="rail-label" data-i18n="Sessions">Sessions</span>
     </button>
     <div class="pane-head">
       <div class="head-row">
-        <h2>所有会话</h2>
-        <button class="icon-btn collapse" data-pane="chats" title="折叠会话列表（Ctrl+B 循环：显示 → 隐藏会话 → 全部隐藏）">«</button>
+        <h2 data-i18n="All sessions">All sessions</h2>
+        <div class="head-actions">
+          <button class="icon-btn drawer-close" type="button" data-drawer-close="chats"
+                  data-i18n-title="Close">×</button>
+          <button class="icon-btn collapse" data-pane="chats"
+                  data-i18n-title="Collapse sessions (Ctrl+B cycles: all shown, sessions hidden, all hidden)">«</button>
+        </div>
       </div>
-      <input type="search" id="chat-filter" placeholder="过滤标题或工作目录…">
+      <input type="search" id="chat-filter" data-i18n-placeholder="Filter title or working directory…"
+             placeholder="Filter title or working directory…">
       <div class="hint" id="chat-count"></div>
     </div>
     <ul class="list" id="chat-list"></ul>
   </section>
 
+  <div class="resizer" id="resizer-chats" role="separator" aria-orientation="vertical"
+       tabindex="0" data-i18n-title="Resize sessions"></div>
+
   <!-- 2. questions of the selected session -->
   <section class="pane" id="pane-questions">
-    <button class="rail" data-pane="questions" title="展开提问列表（Ctrl+Shift+B）">
-      <span class="rail-icon">»</span><span class="rail-label">提问</span>
+    <button class="rail" data-pane="questions" data-i18n-title="Expand questions (Ctrl+Shift+B)">
+      <span class="rail-icon">»</span><span class="rail-label" data-i18n="Questions">Questions</span>
     </button>
     <div class="pane-head">
       <div class="head-row">
-        <h2 id="q-head">提问列表</h2>
-        <button class="icon-btn collapse" data-pane="questions" title="折叠提问列表（Ctrl+Shift+B）">«</button>
+        <h2 id="q-head" data-i18n="Questions">Questions</h2>
+        <div class="head-actions">
+          <button class="icon-btn drawer-close" type="button" data-drawer-close="questions"
+                  data-i18n-title="Close">×</button>
+          <button class="icon-btn collapse" data-pane="questions"
+                  data-i18n-title="Collapse questions (Ctrl+Shift+B)">«</button>
+        </div>
       </div>
       <div class="searchbar">
-        <input type="search" id="q-search" placeholder="搜索提问或回答…（/）">
-        <select id="q-scope" title="搜索范围">
-          <option value="all">提问+回答</option>
-          <option value="q">只搜提问</option>
-          <option value="a">只搜回答</option>
+        <input type="search" id="q-search" data-i18n-placeholder="Search questions or answers… (/)"
+               placeholder="Search questions or answers… (/)">
+        <select id="q-scope" data-i18n-title="Search scope">
+          <option value="all" data-i18n="Questions + answers">Questions + answers</option>
+          <option value="q" data-i18n="Questions only">Questions only</option>
+          <option value="a" data-i18n="Answers only">Answers only</option>
         </select>
       </div>
       <div class="searchbar">
-        <label class="chk"><input type="checkbox" id="search-all-chats"> 在全部会话中搜索</label>
+        <label class="chk">
+          <input type="checkbox" id="search-all-chats">
+          <span data-i18n="Search all sessions">Search all sessions</span>
+        </label>
         <span class="hint" id="q-count"></span>
       </div>
     </div>
     <ul class="list" id="question-list"></ul>
   </section>
 
+  <div class="resizer" id="resizer-questions" role="separator" aria-orientation="vertical"
+       tabindex="0" data-i18n-title="Resize questions"></div>
+
   <!-- 3. answer of the selected question -->
   <section class="pane" id="pane-answer">
     <div class="pane-head">
-      <h2 id="a-head">回答</h2>
+      <h2 id="a-head" data-i18n="Answer">Answer</h2>
       <div class="searchbar" id="answer-actions">
-        <button id="btn-jump-a" class="ghost" title="滚动到回答正文（跳过很长的提问和思考过程）">跳到回答</button>
-        <button id="btn-copy-qa" class="ghost" title="一次复制提问和回答">复制问答</button>
-        <button id="btn-copy-q" class="ghost">复制提问</button>
-        <button id="btn-copy-a" class="ghost">复制回答</button>
-        <button id="btn-raw" class="ghost" title="在 Markdown 渲染和原始文本之间切换">原文</button>
+        <button id="btn-jump-a" class="ghost" data-i18n-title="Jump to answer body (skips a long question and thinking)" data-i18n="Jump to answer">Jump to answer</button>
+        <button id="btn-copy-qa" class="ghost" data-i18n-title="Copy question and answer together" data-i18n="Copy Q&amp;A">Copy Q&amp;A</button>
+        <button id="btn-copy-q" class="ghost" data-i18n="Copy question">Copy question</button>
+        <button id="btn-copy-a" class="ghost" data-i18n="Copy answer">Copy answer</button>
+        <button id="btn-raw" class="ghost" data-i18n-title="Toggle raw Markdown" data-i18n="Raw">Raw</button>
       </div>
     </div>
     <article id="answer-body" class="empty">
-      <p>从左侧选一个会话，再选一条提问，这里显示它的回答、思考过程和工具调用。</p>
-      <p class="hint">数据直接来自 <code>~/.dsh/sessions</code>，只读，不会写入或锁定 DSH 的日志。</p>
+      <p data-i18n="Choose a session on the left, then a question.">Choose a session on the left, then a question.</p>
+      <p class="hint" id="empty-hint"></p>
     </article>
   </section>
 </main>
 
+<div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
+
+<script src="/static/i18n.js"></script>
 <script src="/static/vendor/marked/12.0.2/marked.min.js"></script>
 <script src="/static/vendor/katex/0.16.11/katex.min.js"></script>
 <script src="/static/vendor/highlight.js/11.10.0/hljs.min.js"></script>

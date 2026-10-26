@@ -71,7 +71,7 @@ class BuildSessionTests(unittest.TestCase):
         self.assertEqual(call["job"]["status"], "completed")
         self.assertEqual(call["job"]["duration_ms"], 100)
         labels = [p["label"] for p in result["parts"]]
-        self.assertIn("输出", labels)
+        self.assertIn("Output", labels)
         self.assertIn("stderr", labels)
         self.assertEqual(call["summary"], "列出文件")
 
@@ -158,7 +158,8 @@ class BuildSessionTests(unittest.TestCase):
         first, second = session["turns"]
         self.assertEqual(first["answer"], "第一答")
         self.assertTrue(second["synthetic"])
-        self.assertEqual(second["q"], "（自动继续）")
+        self.assertEqual(second["synthetic_kind"], "auto")
+        self.assertEqual(second["q"], "")
         self.assertEqual(second["answer"], "自动继续的答")
 
 
@@ -206,7 +207,7 @@ class StoreTests(unittest.TestCase):
             store = Store(home)
             hits = store.search("第二轮", None, "all", 50)
             self.assertEqual(len(hits), 1)
-            self.assertEqual(hits[0]["where"], "提问+回答" if "第二轮" in hits[0]["a_preview"] else "提问")
+            self.assertEqual(hits[0]["where"], "Question + answer" if "第二轮" in hits[0]["a_preview"] else "Question")
 
 
 class ImageTests(unittest.TestCase):

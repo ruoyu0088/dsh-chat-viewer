@@ -38,6 +38,7 @@ const norm = (s) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
     beforeParse(win) {
       win.fetch = (input, init) => fetch(new URL(input, BASE + '/'), init);
       win.navigator.clipboard = { writeText: async () => {} };
+      try { win.localStorage.setItem('dshv.lang', 'zh'); } catch (e) { /* file URL */ }
       win.Element.prototype.scrollIntoView = function () {};
       win.open = () => null;
     },
@@ -51,6 +52,59 @@ const norm = (s) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
   check('会话按 workspace 分组', $$('#chat-list li.grp').length > 0, `${$$('#chat-list li.grp').length} 组`);
   check('启动时不自动读取会话日志', $$('#question-list li[data-qid]').length === 0
     && !!$('#answer-body.empty'));
+  check('默认语言为中文', doc.documentElement.lang === 'zh-CN' && txt($('#btn-refresh')) === '刷新');
+
+  const lang = $('#lang-select');
+  lang.value = 'en';
+  lang.dispatchEvent(new win.Event('change', { bubbles: true }));
+  check('切换到英文', await waitFor(() => doc.documentElement.lang === 'en'
+    && txt($('#btn-refresh')) === 'Refresh'
+    && txt($('#pane-chats h2')) === 'All sessions'
+    && $('#q-search').placeholder.startsWith('Search questions')));
+  check('英文页面标题', doc.title === 'DSH Chat Viewer', doc.title);
+  lang.value = 'zh';
+  lang.dispatchEvent(new win.Event('change', { bubbles: true }));
+  check('切换回中文', await waitFor(() => doc.documentElement.lang === 'zh-CN'
+    && txt($('#btn-refresh')) === '刷新'
+    && txt($('#pane-chats h2')) === '所有会话'));
+
+  // Desktop: the two side widths are resizable and persisted.
+  Object.defineProperty(win, 'innerWidth', { configurable: true, value: 1400 });
+  win.dispatchEvent(new win.Event('resize'));
+  const resizer = $('#resizer-chats');
+  const startWidth = doc.documentElement.style.getPropertyValue('--w-chats');
+  resizer.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+  const wider = doc.documentElement.style.getPropertyValue('--w-chats');
+  check('桌面侧栏可用键盘调宽', parseFloat(wider) > parseFloat(startWidth), `${startWidth} -> ${wider}`);
+  check('侧栏宽度写入 localStorage', win.localStorage.getItem('dshv.width.chats') === parseFloat(wider).toString(),
+    win.localStorage.getItem('dshv.width.chats'));
+  resizer.dispatchEvent(new win.MouseEvent('dblclick', { bubbles: true }));
+  check('双击恢复默认宽度', doc.documentElement.style.getPropertyValue('--w-chats') === '280px',
+    doc.documentElement.style.getPropertyValue('--w-chats'));
+
+  // Medium: the sessions pane becomes a drawer.
+  Object.defineProperty(win, 'innerWidth', { configurable: true, value: 1000 });
+  win.dispatchEvent(new win.Event('resize'));
+  check('抽屉不挤占提问栏宽度', doc.documentElement.style.getPropertyValue('--w-questions') === '360px',
+    doc.documentElement.style.getPropertyValue('--w-questions'));
+  $('#btn-open-chats').dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  check('窄屏会话栏为抽屉', doc.body.classList.contains('drawer-chats')
+    && $('#drawer-backdrop').hidden === false);
+  $('#pane-chats [data-drawer-close]').dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  check('抽屉可关闭', !doc.body.classList.contains('drawer-chats')
+    && $('#drawer-backdrop').hidden === true);
+
+  // Phone: both side panes are drawers.
+  Object.defineProperty(win, 'innerWidth', { configurable: true, value: 700 });
+  win.dispatchEvent(new win.Event('resize'));
+  $('#btn-open-questions').dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  check('手机宽度提问栏为抽屉', doc.body.classList.contains('drawer-questions')
+    && $('#drawer-backdrop').hidden === false);
+  doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  check('Esc 关闭抽屉', !doc.body.classList.contains('drawer-questions'));
+
+  Object.defineProperty(win, 'innerWidth', { configurable: true, value: 1400 });
+  win.dispatchEvent(new win.Event('resize'));
 
   // The first session is loaded only after clicking it.
   $$('#chat-list li[data-sid]')[0].dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
@@ -172,6 +226,17 @@ const norm = (s) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
     filterInput.value = '';
     filterInput.dispatchEvent(new win.Event('input', { bubbles: true }));
   }
+
+  // Language switching must re-render dynamic answer/tool labels too.
+  $('#lang-select').value = 'en';
+  $('#lang-select').dispatchEvent(new win.Event('change', { bubbles: true }));
+  check('英文工具卡重新渲染', await waitFor(() => txt($('#btn-raw')) === 'Raw'
+    && /Tool calls/.test(txt($('#answer-body details.calls summary')))
+    && $('#answer-body .calls-filter').placeholder.startsWith('Filter tools')));
+  $('#lang-select').value = 'zh';
+  $('#lang-select').dispatchEvent(new win.Event('change', { bubbles: true }));
+  check('中文工具卡恢复', await waitFor(() => txt($('#btn-raw')) === '原文'
+    && /工具调用/.test(txt($('#answer-body details.calls summary')))));
 
   const sessions = $$('#chat-list li[data-sid]');
   if (sessions.length > 1) {

@@ -60,7 +60,7 @@ CONTENT_TYPES = {
 
 def _clip(text: str, limit: int = 200_000) -> str:
     text = str(text or "")
-    return text if len(text) <= limit else text[:limit] + "\n… (已截断)"
+    return text if len(text) <= limit else text[:limit] + "\n..."
 
 
 def _clip_images(images) -> list:
@@ -76,7 +76,7 @@ def _clip_images(images) -> list:
 def chat_json(chat: dict) -> dict:
     return {
         "id": chat.get("id"),
-        "title": chat.get("title") or "(无标题)",
+        "title": chat.get("title") or "",
         "cwd": chat.get("cwd") or "",
         "workspace": chat.get("workspace") or {},
         "model": chat.get("model") or "",
@@ -106,8 +106,10 @@ def question_json(turn: dict) -> dict:
         "q_id": turn.get("q_id"),
         "q": turn.get("q") or "",
         "q_images": _clip_images(turn.get("q_images")),
+        "image_count": len(turn.get("q_images") or []),
         "steer": bool(turn.get("steer")),
         "synthetic": bool(turn.get("synthetic")),
+        "synthetic_kind": turn.get("synthetic_kind") or "",
         "ts": turn.get("ts") or 0,
         "preview": turn.get("preview") or "",
         "answer_preview": turn.get("answer_preview") or "",
@@ -126,8 +128,10 @@ def turn_json(turn: dict) -> dict:
         "q_id": turn.get("q_id"),
         "q": turn.get("q") or "",
         "q_images": _clip_images(turn.get("q_images")),
+        "image_count": len(turn.get("q_images") or []),
         "steer": bool(turn.get("steer")),
         "synthetic": bool(turn.get("synthetic")),
+        "synthetic_kind": turn.get("synthetic_kind") or "",
         "ts": turn.get("ts") or 0,
         "answer": turn.get("answer") or "",
         "answer_images": _clip_images(turn.get("answer_images")),
@@ -346,7 +350,7 @@ class Handler(BaseHTTPRequestHandler):
                     "questions": items,
                 })
 
-            # /api/turn/<sid>/<seq>/calls — rendered only when the user expands
+            # /api/turn/<sid>/<seq>/calls - rendered only when the user expands
             if len(parts) == 5 and parts[:2] == ["api", "turn"] and parts[4] == "calls":
                 sid = parts[2]
                 try:
@@ -446,8 +450,8 @@ def main() -> int:
     try:
         httpd = Server((args.host, args.port), Handler)
     except OSError as exc:
-        print(f"无法监听 {args.host}:{args.port} — 端口可能已被占用（{exc}）", file=sys.stderr)
-        print("先停掉占用该端口的旧进程，或用 --port 换一个端口。", file=sys.stderr)
+        print(f"Cannot listen on {args.host}:{args.port} - the port may already be in use ({exc})", file=sys.stderr)
+        print("Stop the process using that port, or choose another with --port.", file=sys.stderr)
         return 3
 
     url = f"http://{args.host}:{args.port}/"

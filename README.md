@@ -1,5 +1,7 @@
 # DSH Chat Viewer
 
+**中文** | [English](README.en.md)
+
 只读地查看 **DeepSeek Harness（DSH）** 的历史会话：左边是**所有会话**（按 workspace 分组），
 点开后中间是**这个会话里的所有提问**（过长的截断显示），再点一条提问，右边显示**它的回答**
 （Markdown 渲染、**图像直接显示**）、**可折叠的思考过程**和**可视化的工具调用**。
@@ -12,6 +14,9 @@
 ## 功能
 
 - **三栏布局**：所有会话 / 提问列表 / 回答；两栏可折叠（VSCode 风格），状态记在 localStorage。
+  桌面端两栏可拖动调宽、双击恢复默认；窄屏时会话栏变为抽屉，手机宽度下两栏都变为抽屉。
+- **中英双语**：顶栏切换中文/English，默认跟随浏览器语言，选择记在 localStorage；
+  只翻译界面，不翻译提问、回答和工具输出原文。
 - **快速启动**：会话列表只读每个日志的**头部第一帧** + `session_projcache` 元信息，不解析完整日志；
   点开某个会话时才解析并缓存它的全部内容。
 - **会话分组**：按 workspace 显示；置顶、归档、进行中、模型、提问数、最后活动时间。
@@ -181,7 +186,8 @@ python server.py --home D:\dsh-home   :: 指定 DSH home（默认 %USERPROFILE%\
 - `Ctrl+Shift+B`：只折叠/展开提问栏
 - `/`：聚焦搜索（提问栏折叠时先展开）
 - `j` / `k` / `↑` / `↓`：切换提问
-- `Esc`：从搜索框失焦
+- `Esc`：搜索框失焦 / 关闭抽屉
+- 顶栏语言下拉：切换中文 / English
 - 回答区按钮：跳到回答、复制问答、复制提问、复制回答、原文
 
 ---
@@ -235,14 +241,16 @@ python server.py --home D:\dsh-home   :: 指定 DSH home（默认 %USERPROFILE%\
 | `server.py` | 标准库 HTTP 服务（无第三方依赖），提供 API + 静态文件 + `/file` / `/attachment` |
 | `lib/dsh.py` | 读取 zstd JSONL、解析事件、构建提问/回答/工具卡、缓存与搜索 |
 | `static/index.html` | 三栏页面骨架 |
-| `static/app.js` | 前端逻辑（列表、搜索、高亮、图像、工具卡、跟随刷新） |
-| `static/style.css` | 样式（浅色/深色自动） |
+| `static/app.js` | 前端逻辑（列表、搜索、高亮、图像、工具卡、跟随刷新、可调宽布局） |
+| `static/i18n.js` | 英文源文案 + 中文词典、语言检测与切换 |
+| `static/style.css` | 样式（浅色/深色自动、抽屉式响应布局） |
 | `static/vendor/marked/12.0.2/` | Markdown 渲染（第三方，版本固定，离线可用） |
 | `static/vendor/katex/0.16.11/` | KaTeX 数学公式（js/css/字体，第三方，离线可用） |
 | `static/vendor/highlight.js/11.10.0/` | highlight.js 语法高亮（js/css，第三方，离线可用） |
 | `static/vendor/LICENSES/` / `static/vendor/README.md` | 第三方版本、来源和许可证 |
 | `run.bat` | 自动查找 Python 3.14+ 并启动浏览器（优先本机 pixi 环境） |
 | `THIRD_PARTY_NOTICES.md` | marked / KaTeX / highlight.js 的版本与许可说明 |
+| `README.en.md` | 英文 README |
 | `tests/` | 解析器单测、HTTP 冒烟、可选 jsdom 页面测试 |
 
 ---

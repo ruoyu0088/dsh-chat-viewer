@@ -148,7 +148,7 @@ def lang_from_path(path: str | None) -> str:
 
 def preview(text: str | None, limit: int = 90) -> str:
     flat = " ".join(str(text or "").split())
-    return flat if len(flat) <= limit else flat[:limit] + "…"
+    return flat if len(flat) <= limit else flat[:limit] + "..."
 
 
 def _json_text(value: Any) -> str:
@@ -162,7 +162,7 @@ def _clip(text: str, limit: int) -> tuple[str, bool]:
     text = str(text or "")
     if len(text) <= limit:
         return text, False
-    return text[:limit] + "\n… (已截断)", True
+    return text[:limit] + "\n...", True
 
 
 def _dedupe(items: list[dict]) -> list[dict]:
@@ -562,7 +562,7 @@ def render_result(
                 exit_code = int(match.group(1))
         out["exit_code"] = exit_code
         if stdout.strip():
-            out["parts"].append(_wrap_part("输出", stdout.rstrip(), lang="plaintext"))
+            out["parts"].append(_wrap_part("Output", stdout.rstrip(), lang="plaintext"))
         if stderr.strip():
             out["parts"].append(_wrap_part("stderr", stderr.rstrip(), lang="plaintext"))
         if exit_code not in (None, 0):
@@ -583,12 +583,12 @@ def render_result(
             if wrapped["kind"] == "image" and is_image_path(wrapped["path"]):
                 out["images"].append({"kind": "path", "path": wrapped["path"]})
             elif wrapped["content"].strip():
-                label = "内容" if tool_name in ("read", "read_file", "read_image_file") else "结果"
+                label = "Content" if tool_name in ("read", "read_file", "read_image_file") else "Result"
                 out["parts"].append(
                     _wrap_part(label, wrapped["content"].rstrip(), lang=lang_from_path(wrapped["path"]))
                 )
         elif raw.strip():
-            out["parts"].append(_wrap_part("结果", raw.rstrip(), lang="plaintext"))
+            out["parts"].append(_wrap_part("Result", raw.rstrip(), lang="plaintext"))
 
     # JSON results (ask_user_question, todo_write, load_workspace_dependencies, ...)
     else:
@@ -610,14 +610,13 @@ def render_result(
             # Keep a readable JSON body unless a dedicated renderer consumes it.
             if tool_name not in ("ask_user_question", "todo_write"):
                 out["parts"].append(
-                    _wrap_part("结果", _json_text(parsed), kind="json", lang="json")
+                    _wrap_part("Result", _json_text(parsed), kind="json", lang="json")
                 )
         elif raw.strip():
-            out["parts"].append(_wrap_part("结果", raw.rstrip(), lang="plaintext"))
+            out["parts"].append(_wrap_part("Result", raw.rstrip(), lang="plaintext"))
 
-    structured = tool_name in ("ask_user_question", "todo_write") and out.get("json") is not None
-    if not out["parts"] and not out["images"] and not out["is_error"] and not out["error"] and not structured:
-        out["parts"].append(_wrap_part("结果", "（没有输出）", lang="plaintext"))
+    # No placeholder part: the frontend renders a localized "no output" note
+    # when there are no parts, images, or errors.
 
     # pull images out of text and attach them
     for part in out["parts"]:
@@ -635,7 +634,7 @@ def render_result(
         text_value = str(part.get("text") or "")
         room = TOOL_RESULT_TRUNC - total
         if room <= 0:
-            part["text"] = "… (已截断)"
+            part["text"] = "..."
             out["truncated"] = True
             continue
         part["text"], clipped = _clip(text_value, room)
@@ -738,22 +737,16 @@ def _summary_for(name: str, args: dict) -> str:
         if isinstance(command, str):
             return command.strip().splitlines()[0][:160] if command.strip() else ""
     if name == "ask_user_question":
-        qs = args.get("questions")
-        if isinstance(qs, list):
-            return f"{len(qs)} 个问题"
+        return ""          # frontend localizes the count
     if name == "todo_write":
-        todos = _normalize_todos(args.get("todos"))
-        if todos:
-            return f"{len(todos)} 项待办"
+        return ""          # frontend localizes the count
     if name == "present":
-        files = args.get("files")
-        if isinstance(files, list):
-            return f"{len(files)} 个文件"
+        return ""          # frontend localizes the count
     if name in ("subagent", "subagent_fork"):
         description = args.get("description")
         if isinstance(description, str) and description.strip():
             return description.strip()[:160]
-        return "子代理"
+        return ""
     if name == "workflow":
         meta = args.get("meta")
         if isinstance(meta, dict) and meta.get("name"):
@@ -777,10 +770,6 @@ def _info_for(name: str, args: dict) -> list[str]:
         path = args.get("file_path") or args.get("path")
         if path:
             info.append(normalize_path(path))
-        if args.get("offset") is not None:
-            info.append(f"从第 {args.get('offset')} 行")
-        if args.get("limit") is not None:
-            info.append(f"最多 {args.get('limit')} 行")
     elif name in ("glob", "grep"):
         pattern = args.get("pattern")
         if pattern:
@@ -807,7 +796,7 @@ def _arg_view(name: str, args: dict, raw: str) -> dict | None:
         if isinstance(value, str) and value:
             text, truncated = _clip(value, ARG_TRUNC)
             return {
-                "kind": "code", "label": key, "lang": lang, "text": text,
+                "kind": "code", "label": "Command", "lang": lang, "text": text,
                 "truncated": truncated,
             }
     if name == "write":
@@ -816,7 +805,7 @@ def _arg_view(name: str, args: dict, raw: str) -> dict | None:
         if isinstance(content, str):
             text, truncated = _clip(content, ARG_TRUNC)
             return {
-                "kind": "code", "label": path or "content",
+                "kind": "code", "label": path or "Content",
                 "lang": lang_from_path(path), "text": text, "truncated": truncated,
             }
     if name in ("edit", "patch", "apply_patch"):
@@ -825,7 +814,7 @@ def _arg_view(name: str, args: dict, raw: str) -> dict | None:
         new = args.get("new_string")
         if isinstance(old, str) or isinstance(new, str):
             return {
-                "kind": "diff", "label": path or "diff",
+                "kind": "diff", "label": path or "Diff",
                 "lang": "diff", "text": _diff_text(path, old or "", new or ""),
             }
     if name in ("subagent", "subagent_fork"):
@@ -834,7 +823,7 @@ def _arg_view(name: str, args: dict, raw: str) -> dict | None:
             if isinstance(value, str) and value:
                 text, truncated = _clip(value, ARG_TRUNC)
                 return {
-                    "kind": "code", "label": key, "lang": "markdown",
+                    "kind": "code", "label": "Prompt", "lang": "markdown",
                     "text": text, "truncated": truncated,
                 }
     if name == "workflow":
@@ -842,7 +831,7 @@ def _arg_view(name: str, args: dict, raw: str) -> dict | None:
         if isinstance(script, str) and script:
             text, truncated = _clip(script, ARG_TRUNC)
             return {
-                "kind": "code", "label": "workflow script", "lang": "javascript",
+                "kind": "code", "label": "Workflow script", "lang": "javascript",
                 "text": text, "truncated": truncated,
             }
     if name in ("ask_user_question", "todo_write", "present", "web_search", "web_fetch",
@@ -852,7 +841,7 @@ def _arg_view(name: str, args: dict, raw: str) -> dict | None:
         raw_text = raw if isinstance(raw, str) and raw.strip() else _json_text(args)
         text, truncated = _clip(raw_text, ARG_TRUNC)
         return {
-            "kind": "json", "label": "参数", "lang": "json",
+            "kind": "json", "label": "Arguments", "lang": "json",
             "text": text, "truncated": truncated,
         }
     return None
@@ -954,6 +943,7 @@ def _new_turn(
     turn_no: Any,
     *,
     synthetic: bool = False,
+    synthetic_kind: str = "",
 ) -> dict:
     return {
         "q_id": f"{sid}:{seq}",
@@ -962,6 +952,7 @@ def _new_turn(
         "q_images": images,
         "steer": bool(steer),
         "synthetic": bool(synthetic),
+        "synthetic_kind": synthetic_kind,
         "ts": ts,
         "turn": turn_no,
         "answer_parts": [],
@@ -1031,30 +1022,31 @@ def _compaction_text(data: dict) -> str:
     return ""
 
 
-def _notice_for(event_type: str, data: dict) -> str | None:
+def _notice_for(event_type: str, data: dict) -> dict | None:
     if event_type == "plan/mode":
         active = data.get("active", data.get("enabled"))
-        return f"计划模式：{'开启' if active else '关闭'}" if active is not None else None
+        if active is None:
+            return None
+        return {"key": "plan_mode", "active": bool(active)}
     if event_type == "model/selection":
         provider = data.get("provider")
         model = data.get("model")
         if provider or model:
-            return "模型切换：" + " / ".join(str(x) for x in (provider, model) if x)
+            return {"key": "model_switch", "provider": provider, "model": model}
     if event_type == "working-directory/change":
         cwd = data.get("cwd") or data.get("path")
-        return f"工作目录：{cwd}" if cwd else None
+        if cwd:
+            return {"key": "working_directory", "cwd": cwd}
     if event_type == "goal/change":
         action = data.get("action") or data.get("kind")
         goal = data.get("goal")
         if isinstance(goal, dict):
             goal = goal.get("objective") or goal.get("text")
-        text = f"目标{('：' + str(goal)) if goal else ''}"
-        if action:
-            text = f"目标 {action}" + (f"：{goal}" if goal else "")
-        return text
+        return {"key": "goal", "action": action, "goal": goal}
     if event_type == "approval/decided":
         decision = data.get("decision") or data.get("approved")
-        return f"审批结果：{decision}" if decision is not None else None
+        if decision is not None:
+            return {"key": "approval", "decision": decision}
     return None
 
 
@@ -1151,11 +1143,11 @@ def build_session(sid: str, header: dict, events: list[dict], proj: dict | None 
                 or (pending_user and open_turn_no is not None and cur.get("turn") != open_turn_no)
             )
             if new_turn_without_user:
-                label = "（自动继续）" if turns else "（没有用户提问的会话内容）"
+                kind = "auto" if turns else "orphan"
                 cur = _new_turn(
-                    sid, seq, ts, label, [], False,
+                    sid, seq, ts, "", [], False,
                     open_turn_no if open_turn_no is not None else data.get("turn"),
-                    synthetic=True,
+                    synthetic=True, synthetic_kind=kind,
                 )
                 cur["compactions"].extend(pending_compactions)
                 pending_compactions.clear()
@@ -1194,8 +1186,8 @@ def build_session(sid: str, header: dict, events: list[dict], proj: dict | None 
         elif etype == "tool/call":
             if cur is None:
                 cur = _new_turn(
-                    sid, seq, ts, "（没有用户提问的会话内容）", [], False,
-                    data.get("turn"), synthetic=True,
+                    sid, seq, ts, "", [], False,
+                    data.get("turn"), synthetic=True, synthetic_kind="orphan",
                 )
                 cur["compactions"].extend(pending_compactions)
                 pending_compactions.clear()
@@ -1207,8 +1199,8 @@ def build_session(sid: str, header: dict, events: list[dict], proj: dict | None 
             message_count += 1
             if cur is None:
                 cur = _new_turn(
-                    sid, seq, ts, "（没有用户提问的会话内容）", [], False,
-                    data.get("turn"), synthetic=True,
+                    sid, seq, ts, "", [], False,
+                    data.get("turn"), synthetic=True, synthetic_kind="orphan",
                 )
                 cur["compactions"].extend(pending_compactions)
                 pending_compactions.clear()
@@ -1277,7 +1269,7 @@ def build_session(sid: str, header: dict, events: list[dict], proj: dict | None 
         else:
             notice = _notice_for(etype, data)
             if notice and cur is not None:
-                cur["notices"].append({"seq": seq, "kind": etype, "text": notice})
+                cur["notices"].append({"seq": seq, "kind": etype, **notice})
 
     # Finalize turns -------------------------------------------------------
     real_turns = [t for t in turns if not t.get("synthetic")]
@@ -1296,15 +1288,13 @@ def build_session(sid: str, header: dict, events: list[dict], proj: dict | None 
             and turn_open
             and (open_turn_no is None or turn.get("turn") in (None, open_turn_no))
         )
-        turn["preview"] = preview(turn["q"], 80) or (
-            f"（图片 {len(turn['q_images'])} 张）" if turn["q_images"] else ""
-        )
+        turn["preview"] = preview(turn["q"], 80)
         turn["answer_preview"] = preview(turn["answer"], 110)
         turn.pop("answer_parts", None)
 
     if not title:
         first_q = next((t["q"] for t in real_turns if t["q"].strip()), "")
-        title = proj.get("title") or preview(first_q, 60) or "(无标题)"
+        title = proj.get("title") or preview(first_q, 60) or ""
     if not model:
         model = str(proj.get("model") or "")
     if not provider:
@@ -1605,7 +1595,7 @@ class Store:
         return {
             "id": "",
             "path": cwd,
-            "title": Path(cwd).name if cwd else "(未知工作目录)",
+            "title": Path(cwd).name if cwd else "",
         }
 
     def _build_meta(
@@ -1631,7 +1621,7 @@ class Store:
         )
         title = str(proj.get("title") or "").strip()
         if not title:
-            title = Path(cwd).name if cwd else "(无标题)"
+            title = Path(cwd).name if cwd else ""
         return {
             "id": sid,
             "title": title,
@@ -1676,7 +1666,7 @@ class Store:
         mtime_ms = int(stamp[0] // 1_000_000) if stamp else 0
         return {
             "id": sid,
-            "title": f"（无法读取）{path.name}",
+            "title": path.name,
             "cwd": cwd,
             "created_at": 0,
             "last_activity_at": mtime_ms,
@@ -1717,7 +1707,7 @@ class Store:
             int(session.get("last_activity_at") or 0),
         )
         title = str(session.get("title") or "").strip()
-        if title and title != "(无标题)":
+        if title:
             meta["title"] = title
         for key in (
             "model", "provider", "cwd", "tokens", "stats", "origin",
@@ -1750,7 +1740,7 @@ class Store:
                 meta = self._error_meta(
                     sid, proj, path, stamp, workspace_map, workspace_by_path,
                     pinned, archived,
-                    "无法读取会话头（文件可能正在写入或已损坏）",
+                    "Could not read the session header (the file may be mid-write or corrupt)",
                 )
             else:
                 sid = str(header.get("id") or path.parent.name)
@@ -1807,7 +1797,7 @@ class Store:
                 self._sessions.pop(sid, None)
                 return None
             if session is None:
-                meta["error"] = "无法解析会话头"
+                meta["error"] = "Could not parse the session header"
                 self._sessions.pop(sid, None)
                 return None
             self._sessions[sid] = _LoadedSession(stamp, session)
@@ -1865,7 +1855,7 @@ class Store:
                     continue
                 hit_q = in_q and scope in ("q", "all")
                 hit_a = in_a and scope in ("a", "all")
-                where = "提问+回答" if (hit_q and hit_a) else ("提问" if hit_q else "回答")
+                where = "Question + answer" if (hit_q and hit_a) else ("Question" if hit_q else "Answer")
                 out.append({
                     "session_id": chat["id"],
                     "title": chat.get("title") or "",
@@ -1874,10 +1864,8 @@ class Store:
                     "ts": turn.get("ts"),
                     "where": where,
                     "steer": bool(turn.get("steer")),
-                    "q_preview": preview(turn.get("q") or "", 70) or (
-                        f"（图片 {len(turn.get('q_images') or [])} 张）"
-                        if turn.get("q_images") else ""
-                    ),
+                    "q_preview": preview(turn.get("q") or "", 70),
+                    "image_count": len(turn.get("q_images") or []),
                     "a_preview": preview(turn.get("answer") or "", 90),
                 })
                 if len(out) >= limit:
